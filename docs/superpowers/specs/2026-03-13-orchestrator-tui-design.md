@@ -1,19 +1,20 @@
-# Orchestrator TUI — Design Spec
+# Worktree Dashboard — Design Spec
 
 ## Overview
 
-A single-file Python TUI (`tui.py`) that provides a live dashboard for managing worktree-orchestrator sessions across multiple projects. Uses `rich` for rendering. Delegates all mutations (spawn, restart, kill) to the existing `orchestrator.py` script.
+A standalone Python TUI for managing git worktree sessions across multiple projects. Bundles the orchestrator engine (`orchestrator.py`) so it works out of the box — no Claude Code skill required. Uses `rich` for rendering.
 
 ## Goals
 
+- **Standalone:** Ships with everything needed — orchestrator engine, config templates, and the dashboard TUI. Users clone the repo, `pip install rich`, and go.
 - Show all worktree sessions across all configured projects in one view
 - Navigate and manage sessions with single keypresses
 - Auto-refresh health status every ~2 seconds
-- Zero coupling to orchestrator.py internals — reads `sessions.json` for display, shells out for actions
+- The TUI reads `sessions.json` for display and shells out to the bundled `orchestrator.py` for actions
 
 ## Discovery & Configuration
 
-### Config file: `~/.config/orchestrator-tui.toml`
+### Config file: `~/.config/worktree-dashboard.toml`
 
 ```toml
 [[projects]]
@@ -29,17 +30,16 @@ If the config file doesn't exist, the TUI prints a message explaining how to cre
 
 ### Orchestrator script discovery
 
-The TUI needs to find `orchestrator.py` to shell out to it. Resolution order:
+The TUI finds `orchestrator.py` via:
 1. `ORCHESTRATOR_SCRIPT` environment variable (explicit override)
-2. Check if `orchestrator.py` exists adjacent to `tui.py` (bundled together)
-3. Well-known path: `~/.claude/skills/worktree-orchestrator/scripts/orchestrator.py`
+2. `orchestrator.py` adjacent to `tui.py` (the default — bundled in the same repo)
 
 If not found, exit with an error message.
 
 ## Display Layout
 
 ```
- Orchestrator Dashboard                        Auto-refresh: ON
+ Worktree Dashboard                            Auto-refresh: ON
  ────────────────────────────────────────────────────────────────
  waidplan
    ▶ 1  b1   backend ✓ 64785  frontend ✓ 64786   running
@@ -170,19 +170,40 @@ The TUI reads this but never writes to it — all writes go through orchestrator
 ## File Structure
 
 ```
-~/code/orchestrator/
-├── tui.py                # Single-file TUI application
+~/code/worktree-dashboard/
+├── tui.py                # Dashboard TUI
+├── orchestrator.py       # Worktree orchestrator engine (bundled from claude skill)
 ├── requirements.txt      # rich
+├── templates/
+│   ├── orchestrator.toml # Example .orchestrator.toml for new projects
+│   └── secrets           # Example .orchestrator/.secrets
 └── docs/
     └── superpowers/
         └── specs/
             └── 2026-03-13-orchestrator-tui-design.md
 ```
 
+### Bundled files
+
+- **`orchestrator.py`** — The full worktree orchestrator engine, copied from the Claude Code skill. This is the same script that manages worktrees, starts/stops servers, and handles spawn/kill/restart. Bundled so the dashboard works standalone.
+- **`templates/orchestrator.toml`** — Example project config that users copy into their repo as `.orchestrator.toml`. Shows the `[project]` and `[servers.*]` sections with commented examples.
+- **`templates/secrets`** — Example secrets file that users copy into `.orchestrator/.secrets`. Shows the format with placeholder values.
+
+### Setup flow for a new user
+
+1. Clone `worktree-dashboard`
+2. `pip install rich`
+3. Copy `templates/orchestrator.toml` → `<your-repo>/.orchestrator.toml`, edit server config
+4. Copy `templates/secrets` → `<your-repo>/.orchestrator/.secrets`, fill in real values
+5. Create `~/.config/worktree-dashboard.toml` listing your project paths
+6. Run `python tui.py`
+
+Users can also use `orchestrator.py` directly from the CLI (`python orchestrator.py spawn 1`, etc.) without the TUI.
+
 ## Error Handling
 
 - Missing config file → clear error message with example config
-- Missing orchestrator.py → error with resolution steps
+- Missing orchestrator.py → error saying it should be adjacent to tui.py
 - Project directory doesn't exist → skip it, show warning in dashboard
 - sessions.json missing or empty → show project with "(no sessions)"
 - orchestrator.py command fails → show stderr output, return to dashboard
