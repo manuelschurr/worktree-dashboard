@@ -595,6 +595,7 @@ def cmd_spawn(args):
             shell=True,
             cwd=str(cwd),
             env=proc_env,
+            stdin=subprocess.DEVNULL,
             stdout=log_handle,
             stderr=subprocess.STDOUT,
             **({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if IS_WINDOWS else {})
@@ -807,6 +808,7 @@ def cmd_restart(args):
             shell=True,
             cwd=str(cwd),
             env=proc_env,
+            stdin=subprocess.DEVNULL,
             stdout=log_handle,
             stderr=subprocess.STDOUT,
             **({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if IS_WINDOWS else {})
