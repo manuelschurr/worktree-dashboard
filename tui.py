@@ -295,11 +295,15 @@ def restore_terminal():
 
 
 def wait_for_key():
-    """Block until any key is pressed."""
+    """Block until a fresh key is pressed (drains any buffered input first)."""
     if IS_WINDOWS:
         import msvcrt
+        while msvcrt.kbhit():
+            msvcrt.getch()
         msvcrt.getch()
     else:
+        import termios
+        termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
         get_key(timeout_s=300)
 
 
@@ -316,6 +320,7 @@ def run_orchestrator(orch_script: Path, project_path: Path, args: list[str]) -> 
     result = subprocess.run(
         cmd,
         cwd=str(project_path),
+        stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
     )
@@ -331,6 +336,7 @@ def run_orchestrator_live(orch_script: Path, project_path: Path, args: list[str]
     result = subprocess.run(
         cmd,
         cwd=str(project_path),
+        stdin=subprocess.DEVNULL,
     )
     return result.returncode
 
