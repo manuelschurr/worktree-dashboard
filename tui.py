@@ -114,7 +114,7 @@ def parse_toml(text: str) -> dict:
 # Config & discovery
 # ---------------------------------------------------------------------------
 
-CONFIG_PATH = Path.home() / ".config" / "worktree-dashboard.toml"
+CONFIG_PATH = Path(__file__).parent / "config.toml"
 
 
 def find_orchestrator_script() -> Path:
@@ -142,7 +142,7 @@ def load_dashboard_config() -> list[dict]:
         print(f"Create it with:", file=sys.stderr)
         print(f"", file=sys.stderr)
         print(f'  [[projects]]', file=sys.stderr)
-        print(f'  path = "C:/Users/you/code/your-project"', file=sys.stderr)
+        print(f'  path = "/path/to/your-project"', file=sys.stderr)
         sys.exit(1)
 
     raw = parse_toml(CONFIG_PATH.read_text(encoding="utf-8"))
