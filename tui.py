@@ -185,6 +185,22 @@ def load_sessions(project_path: Path) -> dict:
         return {}
 
 
+def _remove_session_entry(project_path: Path, session_name: str) -> bool:
+    """Remove a single session from sessions.json. Returns True if removed."""
+    sessions_file = project_path / ".orchestrator" / "sessions.json"
+    if not sessions_file.exists():
+        return False
+    try:
+        sessions = json.loads(sessions_file.read_text(encoding="utf-8"))
+        if session_name in sessions:
+            del sessions[session_name]
+            sessions_file.write_text(json.dumps(sessions, indent=2), encoding="utf-8")
+            return True
+    except (json.JSONDecodeError, OSError):
+        pass
+    return False
+
+
 def build_dashboard_data(projects: list[dict]) -> list[dict]:
     """Build the full data model for rendering.
 
@@ -202,10 +218,9 @@ def build_dashboard_data(projects: list[dict]) -> list[dict]:
         raw_sessions = load_sessions(proj["path"])
         sessions = []
         for key, s in raw_sessions.items():
-            # Filter out ghost sessions (killed+removed but still in sessions.json)
             wt = s.get("worktree", "")
-            if s.get("status") == "stopped" and wt and not Path(wt).exists():
-                continue
+            wt_path = Path(wt) if wt else None
+            worktree_exists = wt_path is not None and wt_path.exists() and (wt_path / ".git").exists()
 
             servers = []
             for srv in s.get("servers", []):
@@ -221,6 +236,10 @@ def build_dashboard_data(projects: list[dict]) -> list[dict]:
             status = s.get("status", "unknown")
             if status == "running" and servers and all(not srv["alive"] for srv in servers):
                 status = "dead"
+
+            # Mark as ghost if worktree directory is gone
+            if not worktree_exists:
+                status = "ghost"
 
             sessions.append({
                 "key": key,
@@ -287,17 +306,20 @@ def render_dashboard(data: list[dict], selected_idx: int, selectable_items: list
                 srv_str = "  ".join(srv_parts)
 
                 # Status color
-                status_colors = {"running": "green", "stopped": "yellow", "dead": "red"}
+                status_colors = {"running": "green", "stopped": "yellow", "dead": "red", "ghost": "dim red"}
                 status_color = status_colors.get(s["status"], "white")
                 status_str = f"[{status_color}]{s['status']}[/{status_color}]"
 
-                line = f"  {marker} {s['key']:4s} {s['branch']:20s} {srv_str}   {status_str}"
+                if s["status"] == "ghost":
+                    line = f"  {marker} {s['key']:4s} {s['branch']:20s} [dim](worktree gone)[/dim]   {status_str}"
+                else:
+                    line = f"  {marker} {s['key']:4s} {s['branch']:20s} {srv_str}   {status_str}"
                 console.print(line, style=style, highlight=False)
                 item_idx += 1
 
     # Footer
     console.print("\n" + "─" * console.width)
-    console.print("[dim]↑↓/jk[/dim] navigate  [dim]R[/dim] refresh  [dim]r[/dim] restart  [dim]x[/dim] kill  [dim]X[/dim] kill+remove  [dim]s[/dim] spawn  [dim]l[/dim] logs  [dim]i[/dim] init  [dim]q[/dim] quit")
+    console.print("[dim]↑↓/jk[/dim] navigate  [dim]R[/dim] refresh  [dim]r[/dim] restart  [dim]x[/dim] kill  [dim]X[/dim] kill+remove  [dim]s[/dim] spawn  [dim]l[/dim] logs  [dim]c[/dim] cleanup  [dim]i[/dim] init  [dim]q[/dim] quit")
 
 
 def build_selectable_items(data: list[dict]) -> list[dict]:
@@ -452,6 +474,14 @@ def do_restart(orch_script: Path, session: dict):
     console.clear()
     name = session["key"]
     project = session["project_name"]
+
+    if session["status"] == "ghost":
+        console.print(f"[red]Cannot restart session {name} — worktree no longer exists.[/red]")
+        console.print(f"[dim]Use [bold]c[/bold] to clean up ghost sessions, or [bold]s[/bold] to spawn a new one.[/dim]")
+        console.print("\n[dim]Press any key to return...[/dim]")
+        wait_for_key()
+        return
+
     if not confirm(f"Restart session [bold]{name}[/bold] in [cyan]{project}[/cyan]? (y/n) "):
         console.print("[dim]Cancelled.[/dim]")
         time.sleep(0.5)
@@ -472,6 +502,13 @@ def do_kill(orch_script: Path, session: dict):
     console.clear()
     name = session["key"]
     project = session["project_name"]
+
+    if session["status"] == "ghost":
+        console.print(f"[yellow]Session {name} is a ghost (worktree gone). Use [bold]c[/bold] to clean up or [bold]X[/bold] to remove it.[/yellow]")
+        console.print("\n[dim]Press any key to return...[/dim]")
+        wait_for_key()
+        return
+
     if not confirm(f"Kill session [bold]{name}[/bold] in [cyan]{project}[/cyan]? (y/n) "):
         console.print("[dim]Cancelled.[/dim]")
         time.sleep(0.5)
@@ -492,6 +529,22 @@ def do_kill_remove(orch_script: Path, session: dict):
     console.clear()
     name = session["key"]
     project = session["project_name"]
+
+    if session["status"] == "ghost":
+        # Ghost session — worktree already gone, just purge from sessions.json
+        if not confirm(f"Remove ghost session [bold]{name}[/bold] from [cyan]{project}[/cyan]? (y/n) "):
+            console.print("[dim]Cancelled.[/dim]")
+            time.sleep(0.5)
+            return
+        removed = _remove_session_entry(session["project_path"], name)
+        if removed:
+            console.print(f"[green]Removed ghost session {name}.[/green]")
+        else:
+            console.print(f"[yellow]Session {name} already gone.[/yellow]")
+        console.print("\n[dim]Press any key to return...[/dim]")
+        wait_for_key()
+        return
+
     if not confirm(f"Kill + remove session [bold]{name}[/bold] in [cyan]{project}[/cyan]? (y/n) "):
         console.print("[dim]Cancelled.[/dim]")
         time.sleep(0.5)
@@ -566,6 +619,13 @@ def do_logs(orch_script: Path, session: dict):
     console.clear()
     name = session["key"]
     project = session["project_name"]
+
+    if session["status"] == "ghost":
+        console.print(f"[red]No logs available — session {name} is a ghost (worktree gone).[/red]")
+        console.print("\n[dim]Press any key to return...[/dim]")
+        wait_for_key()
+        return
+
     console.print(f"[bold]Logs for session {name} ({project})[/bold]\n")
 
     stdout, stderr, rc = run_orchestrator(orch_script, session["project_path"], ["logs", name])
@@ -616,6 +676,49 @@ def do_init(orch_script: Path, data: list[dict], items: list[dict], selected_idx
     console.print(stdout)
     if stderr:
         console.print(f"[red]{stderr}[/red]")
+    console.print("\n[dim]Press any key to return...[/dim]")
+    wait_for_key()
+
+
+def do_cleanup(orch_script: Path, data: list[dict]):
+    """Clean up ghost sessions across all projects."""
+    restore_terminal()
+    console.clear()
+
+    # Count ghosts per project
+    ghost_projects = []
+    for proj in data:
+        ghosts = [s for s in proj["sessions"] if s["status"] == "ghost"]
+        if ghosts:
+            ghost_projects.append((proj, ghosts))
+
+    if not ghost_projects:
+        console.print("[green]No ghost sessions to clean up.[/green]")
+        console.print("\n[dim]Press any key to return...[/dim]")
+        wait_for_key()
+        return
+
+    total = sum(len(g) for _, g in ghost_projects)
+    console.print(f"[bold]Found {total} ghost session(s):[/bold]\n")
+    for proj, ghosts in ghost_projects:
+        console.print(f"  [cyan]{proj['name']}[/cyan]: {', '.join(g['key'] for g in ghosts)}")
+
+    console.print()
+    if not confirm(f"Remove all ghost sessions? (y/n) "):
+        console.print("[dim]Cancelled.[/dim]")
+        time.sleep(0.5)
+        return
+
+    removed = 0
+    for proj, ghosts in ghost_projects:
+        # Run orchestrator cleanup to also prune git worktrees
+        stdout, stderr, rc = run_orchestrator(orch_script, proj["path"], ["cleanup", "--force"])
+        console.print(stdout.strip())
+        if stderr:
+            console.print(f"[red]{stderr.strip()}[/red]")
+        removed += len(ghosts)
+
+    console.print(f"\n[green]Cleaned up {removed} ghost session(s).[/green]")
     console.print("\n[dim]Press any key to return...[/dim]")
     wait_for_key()
 
@@ -693,6 +796,9 @@ def main():
             elif key == 'l':
                 if items:
                     do_logs(orch_script, items[selected_idx])
+            elif key == 'c':
+                do_cleanup(orch_script, data)
+                refresh(show_indicator=False)
             elif key == 'i':
                 do_init(orch_script, data, items, selected_idx)
                 refresh(show_indicator=False)
