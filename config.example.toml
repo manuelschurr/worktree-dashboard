@@ -1,0 +1,9 @@
+# List the projects you want to monitor.
+# Each project should have a .orchestrator.toml in its root.
+# Copy this file to config.toml and edit the paths.
+
+[[projects]]
+path = "/path/to/your-project"
+
+# [[projects]]
+# path = "/path/to/another-project"
