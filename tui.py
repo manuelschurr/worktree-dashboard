@@ -247,13 +247,15 @@ from rich.text import Text
 console = Console()
 
 
-def render_dashboard(data: list[dict], selected_idx: int, selectable_items: list[dict], auto_refresh: bool):
+def render_dashboard(data: list[dict], selected_idx: int, selectable_items: list[dict], status_msg: str = ""):
     """Render the full dashboard to the terminal."""
     console.clear()
 
     # Header
-    refresh_text = "[green]ON[/green]" if auto_refresh else "[red]OFF[/red]"
-    console.print(f"[bold]Worktree Dashboard[/bold]                            Auto-refresh: {refresh_text}")
+    header = "[bold]Worktree Dashboard[/bold]"
+    if status_msg:
+        header += f"  {status_msg}"
+    console.print(header)
     console.print("─" * console.width)
 
     if not any(proj["sessions"] for proj in data):
@@ -295,7 +297,7 @@ def render_dashboard(data: list[dict], selected_idx: int, selectable_items: list
 
     # Footer
     console.print("\n" + "─" * console.width)
-    console.print("[dim]↑↓/jk[/dim] navigate  [dim]r[/dim] restart  [dim]x[/dim] kill  [dim]X[/dim] kill+remove  [dim]s[/dim] spawn  [dim]l[/dim] logs  [dim]i[/dim] init  [dim]a[/dim] auto-refresh  [dim]q[/dim] quit")
+    console.print("[dim]↑↓/jk[/dim] navigate  [dim]R[/dim] refresh  [dim]r[/dim] restart  [dim]x[/dim] kill  [dim]X[/dim] kill+remove  [dim]s[/dim] spawn  [dim]l[/dim] logs  [dim]i[/dim] init  [dim]q[/dim] quit")
 
 
 def build_selectable_items(data: list[dict]) -> list[dict]:
@@ -627,35 +629,40 @@ def main():
     projects = load_dashboard_config()
 
     selected_idx = 0
-    auto_refresh = True
+    status_msg = ""
 
     # Initial data load and render
     data = build_dashboard_data(projects)
     items = build_selectable_items(data)
     if items:
         selected_idx = min(selected_idx, len(items) - 1)
-    render_dashboard(data, selected_idx, items, auto_refresh)
+    render_dashboard(data, selected_idx, items)
 
-    def refresh():
-        nonlocal data, items, selected_idx
+    def refresh(show_indicator=True):
+        nonlocal data, items, selected_idx, status_msg
+        if show_indicator:
+            status_msg = "[yellow]refreshing...[/yellow]"
+            render_dashboard(data, selected_idx, items, status_msg)
         data = build_dashboard_data(projects)
         items = build_selectable_items(data)
         if not items:
             selected_idx = 0
         else:
             selected_idx = min(selected_idx, len(items) - 1)
+        status_msg = "[green]refreshed[/green]"
 
     try:
         while True:
-            key = get_key(timeout_s=2.0 if auto_refresh else 300.0)
+            key = get_key(timeout_s=300.0)
 
             if key is None:
-                # Auto-refresh tick — reload data and re-render
-                refresh()
-                render_dashboard(data, selected_idx, items, auto_refresh)
                 continue
 
-            # Navigation — no data reload, just move cursor and re-render
+            # Clear status on any keypress (except the refresh key itself)
+            if key != 'R':
+                status_msg = ""
+
+            # Navigation
             if key in ('UP', 'k'):
                 if items and selected_idx > 0:
                     selected_idx -= 1
@@ -663,38 +670,38 @@ def main():
                 if items and selected_idx < len(items) - 1:
                     selected_idx += 1
 
-            # Toggle auto-refresh
-            elif key == 'a':
-                auto_refresh = not auto_refresh
+            # Manual refresh
+            elif key == 'R':
+                refresh()
 
-            # Actions — reload data after each
+            # Actions — refresh data after each
             elif key in ('r', 'ENTER'):
                 if items:
                     do_restart(orch_script, items[selected_idx])
-                    refresh()
+                    refresh(show_indicator=False)
             elif key == 'x':
                 if items:
                     do_kill(orch_script, items[selected_idx])
-                    refresh()
+                    refresh(show_indicator=False)
             elif key == 'X':
                 if items:
                     do_kill_remove(orch_script, items[selected_idx])
-                    refresh()
+                    refresh(show_indicator=False)
             elif key == 's':
                 do_spawn(orch_script, data, items, selected_idx)
-                refresh()
+                refresh(show_indicator=False)
             elif key == 'l':
                 if items:
                     do_logs(orch_script, items[selected_idx])
             elif key == 'i':
                 do_init(orch_script, data, items, selected_idx)
-                refresh()
+                refresh(show_indicator=False)
 
             # Quit
             elif key == 'q':
                 break
 
-            render_dashboard(data, selected_idx, items, auto_refresh)
+            render_dashboard(data, selected_idx, items, status_msg)
 
     except KeyboardInterrupt:
         pass
