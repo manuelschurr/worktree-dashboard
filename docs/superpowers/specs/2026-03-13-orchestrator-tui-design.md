@@ -49,8 +49,14 @@ If not found, exit with an error message.
  other-project
      5  b5   web ✗ —                              stopped
  ────────────────────────────────────────────────────────────────
- ↑↓/jk navigate  r restart  k kill  K kill+remove  s spawn  l logs  q quit
+ ↑↓/jk navigate  r restart  x kill  X kill+remove  s spawn  l logs  q quit
 ```
+
+### Navigation
+
+- The cursor moves only between session rows. Project headers are not selectable — `↑`/`↓` skip over them.
+- If no sessions exist across any project, all action keys (`r`, `x`, `X`, `l`) are no-ops.
+- Spawn (`s`) targets the project that the cursor is currently within (the nearest project group header above the cursor). If there are no sessions at all and the cursor has no project context, the TUI prompts the user to pick a project from the configured list.
 
 ### Rendering
 
@@ -89,28 +95,14 @@ Both wrapped in a `get_key(timeout_ms)` function that returns:
 | `↑` / `k` | Move selection up |
 | `↓` / `j` | Move selection down |
 | `r` / `Enter` | Restart selected session |
-| `k` | Kill selected session (when not navigating — see note) |
-| `K` (shift-k) | Kill + remove worktree for selected session |
-| `s` | Spawn new session — prompts for session name, then runs spawn |
-| `l` | Show logs for selected session (last 30 lines, press any key to return) |
+| `x` | Kill selected session |
+| `X` (shift-x) | Kill + remove worktree |
+| `s` | Spawn new session (targets current project group) |
+| `l` | Show logs (last 50 lines, press any key to return) |
 | `a` | Toggle auto-refresh on/off |
 | `q` | Quit |
 
-**Note on `k` ambiguity:** `k` is both "navigate up" (vim) and "kill". Resolution: `k` means navigate up. Kill is only available via the dedicated `x` key instead. This avoids accidental kills.
-
-Revised:
-
-| Key | Action |
-|-----|--------|
-| `↑` / `k` | Move selection up |
-| `↓` / `j` | Move selection down |
-| `r` / `Enter` | Restart selected session |
-| `x` | Kill selected session |
-| `X` (shift-x) | Kill + remove worktree |
-| `s` | Spawn new session |
-| `l` | Show logs |
-| `a` | Toggle auto-refresh |
-| `q` | Quit |
+`k` is reserved for vim-style navigation up. Kill uses `x` to avoid accidental kills.
 
 ## Actions (shelling out to orchestrator.py)
 
@@ -126,23 +118,29 @@ subprocess.run(
 
 The TUI always sets `cwd` to the project's repo root so that `orchestrator.py` finds the correct `.orchestrator.toml` and `.orchestrator/.secrets`.
 
+**Terminal mode:** Any action requiring `input()` or line-buffered I/O (spawn name prompt, confirmation prompts) must first restore the terminal to cooked mode. After the action completes, raw mode is re-entered for the keypress loop.
+
+**After every action:** The TUI shows the subprocess output and waits for a keypress ("press any key to return"). The session list is re-read immediately after returning to the dashboard (not waiting for the next auto-refresh tick).
+
 ### Spawn flow
 
-1. TUI prompts for session name (simple `input()` after restoring terminal to cooked mode)
-2. Runs `orchestrator.py spawn <name> --no-claude` in the selected project's directory
-3. Shows output briefly, then returns to dashboard
+1. Targets the project of the currently selected session (or prompts if ambiguous)
+2. Restores terminal to cooked mode, prompts for session name via `input()`
+3. Runs `orchestrator.py spawn <name> --no-claude` in the project's directory
+4. Shows output, press any key to return
 
-`--no-claude` is used because the user is already in a terminal managing things. They can manually open Claude in the worktree if needed.
+`--no-claude` is used because the user is already in a terminal managing things.
 
 ### Restart / Kill / Kill+remove
 
-1. Confirm with a brief "Restart session 1? (y/n)" prompt
-2. Run the command, show output, return to dashboard
+1. Restores terminal to cooked mode
+2. Confirms with "Restart session 1? (y/n)" prompt (single keypress)
+3. Runs the command, shows output, press any key to return
 
 ### Logs
 
-1. Run `orchestrator.py logs <name> -n 30`
-2. Display output in a pager-like view (just print it, "press any key to return")
+1. Run `orchestrator.py logs <name>` (uses orchestrator's default of 50 lines)
+2. Shows output, press any key to return
 
 ## Data Model
 
@@ -165,7 +163,9 @@ The TUI reads `sessions.json` from each project's `.orchestrator/` directory. Th
 }
 ```
 
-The TUI reads this but never writes to it — all writes go through orchestrator.py.
+The TUI reads this but never writes to it — all writes go through orchestrator.py. The JSON keys are the canonical session identifiers passed to orchestrator.py commands.
+
+**Concurrent access:** If `orchestrator.py` is writing `sessions.json` while the TUI reads it, the read may fail. The TUI wraps JSON parsing in try/except and retries on the next refresh cycle.
 
 ## File Structure
 
@@ -194,3 +194,5 @@ The TUI reads this but never writes to it — all writes go through orchestrator
 - No live log streaming / split panes (that's the "Full dashboard" tier)
 - No editing of .orchestrator.toml or .secrets from the TUI
 - No auto-discovery of projects (explicit config only)
+- No `cleanup` command — batch removal of stopped sessions is better suited to the CLI directly
+- No `status` command passthrough — the TUI does its own PID health checks directly for speed (avoids subprocess overhead every 2 seconds)
