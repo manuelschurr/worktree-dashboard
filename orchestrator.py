@@ -723,10 +723,7 @@ def cmd_kill(args):
     if IS_WINDOWS and args.remove:
         time.sleep(1.5)
 
-    s["status"] = "stopped"
-    save_sessions(repo_root, sessions)
-
-    # Phase 3: Remove worktree and logs
+    # Phase 3: Remove worktree, logs, and registry entry
     if args.remove:
         wt = Path(s["worktree"])
         if wt.exists():
@@ -745,6 +742,11 @@ def cmd_kill(args):
         log_dir = orch_dir(repo_root) / LOGS_DIR / name
         if log_dir.exists():
             _rmtree_robust(log_dir)
+        del sessions[name]
+    else:
+        s["status"] = "stopped"
+
+    save_sessions(repo_root, sessions)
 
 
 def cmd_restart(args):
@@ -860,10 +862,16 @@ def cmd_cleanup(args):
         wt = Path(s["worktree"])
         if wt.exists():
             print(f"Removing worktree {wt}...")
-            subprocess.run(
+            result = subprocess.run(
                 ["git", "worktree", "remove", str(wt), "--force"],
-                cwd=repo_root
+                cwd=repo_root, capture_output=True, text=True
             )
+            if result.returncode == 0:
+                print("Worktree removed.")
+            else:
+                print(f"git worktree remove failed, falling back to manual removal...")
+                _rmtree_robust(wt)
+                print("Worktree removed (manual).")
         log_dir = orch_dir(repo_root) / LOGS_DIR / name
         if log_dir.exists():
             _rmtree_robust(log_dir)
@@ -872,7 +880,7 @@ def cmd_cleanup(args):
         del sessions[name]
     save_sessions(repo_root, sessions)
 
-    subprocess.run(["git", "worktree", "prune"], cwd=repo_root)
+    subprocess.run(["git", "worktree", "prune"], cwd=repo_root, capture_output=True)
     print("Cleanup complete.")
 
 
