@@ -6,12 +6,11 @@ Usage:
     python tui.py
 
 Requires: pip install rich
-Config:   ~/.config/worktree-dashboard.toml
+Config:   config.toml (adjacent to this script)
 """
 
 import json
 import os
-import platform
 import subprocess
 import sys
 import time
@@ -23,91 +22,7 @@ if hasattr(sys.stdout, "reconfigure") and sys.stdout.encoding and sys.stdout.enc
 if hasattr(sys.stderr, "reconfigure") and sys.stderr.encoding and sys.stderr.encoding.lower() not in ("utf-8", "utf8"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-IS_WINDOWS = platform.system() == "Windows"
-
-# ---------------------------------------------------------------------------
-# TOML parser (stdlib-only, supports nested tables and [[array]] syntax)
-# ---------------------------------------------------------------------------
-
-def parse_toml(text: str) -> dict:
-    try:
-        import tomllib
-        return tomllib.loads(text)
-    except ImportError:
-        pass
-
-    result = {}
-    current_path = []
-    current_array_key = None
-
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-
-        # [[array.of.tables]]
-        if line.startswith("[[") and line.endswith("]]"):
-            section = line[2:-2].strip()
-            parts = section.split(".")
-            current_array_key = parts[-1]
-            parent = result
-            for part in parts[:-1]:
-                if part not in parent:
-                    parent[part] = {}
-                parent = parent[part]
-            if current_array_key not in parent:
-                parent[current_array_key] = []
-            parent[current_array_key].append({})
-            current_path = parts
-            continue
-
-        # [table]
-        if line.startswith("[") and line.endswith("]"):
-            section = line[1:-1].strip()
-            current_path = section.split(".")
-            current_array_key = None
-            d = result
-            for part in current_path:
-                if part not in d:
-                    d[part] = {}
-                elif isinstance(d[part], list):
-                    # nested table inside array item — target last element
-                    pass
-                d = d[part] if not isinstance(d[part], list) else d[part][-1]
-            continue
-
-        if "=" in line:
-            key, _, val = line.partition("=")
-            key = key.strip()
-            val = val.strip()
-            # Strip inline comments
-            if "#" in val:
-                in_str = False
-                for i, ch in enumerate(val):
-                    if ch == '"':
-                        in_str = not in_str
-                    elif ch == "#" and not in_str:
-                        val = val[:i].strip()
-                        break
-            if val.startswith('"') and val.endswith('"'):
-                parsed = val[1:-1]
-            elif val.isdigit():
-                parsed = int(val)
-            elif val.lower() in ("true", "false"):
-                parsed = val.lower() == "true"
-            else:
-                parsed = val
-
-            # Navigate to the correct target dict
-            d = result
-            for part in current_path:
-                if isinstance(d.get(part), list):
-                    d = d[part][-1]
-                else:
-                    d = d[part]
-            d[key] = parsed
-
-    return result
+from orchestrator import parse_toml, is_process_alive, IS_WINDOWS
 
 
 # ---------------------------------------------------------------------------
@@ -158,21 +73,6 @@ def load_dashboard_config() -> list[dict]:
 # Session data
 # ---------------------------------------------------------------------------
 
-def is_process_alive(pid: int) -> bool:
-    """Check if a process is running."""
-    try:
-        if IS_WINDOWS:
-            result = subprocess.run(
-                ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
-                capture_output=True, text=True
-            )
-            return str(pid) in result.stdout
-        else:
-            os.kill(pid, 0)
-            return True
-    except (OSError, ProcessLookupError):
-        return False
-
 
 def load_sessions(project_path: Path) -> dict:
     """Load sessions.json for a project. Returns {} on any error."""
@@ -184,21 +84,6 @@ def load_sessions(project_path: Path) -> dict:
     except (json.JSONDecodeError, OSError):
         return {}
 
-
-def _remove_session_entry(project_path: Path, session_name: str) -> bool:
-    """Remove a single session from sessions.json. Returns True if removed."""
-    sessions_file = project_path / ".orchestrator" / "sessions.json"
-    if not sessions_file.exists():
-        return False
-    try:
-        sessions = json.loads(sessions_file.read_text(encoding="utf-8"))
-        if session_name in sessions:
-            del sessions[session_name]
-            sessions_file.write_text(json.dumps(sessions, indent=2), encoding="utf-8")
-            return True
-    except (json.JSONDecodeError, OSError):
-        pass
-    return False
 
 
 def build_dashboard_data(projects: list[dict]) -> list[dict]:
@@ -277,21 +162,22 @@ def render_dashboard(data: list[dict], selected_idx: int, selectable_items: list
     console.print(header)
     console.print("─" * console.width)
 
-    if not any(proj["sessions"] for proj in data):
-        console.print("\n[dim]No sessions found across any project.[/dim]\n")
+    if not data:
+        console.print("\n[dim]No projects configured.[/dim]\n")
     else:
-        item_idx = 0
-        for proj in data:
-            console.print(f"\n[bold cyan]{proj['name']}[/bold cyan]")
+        for item_idx, item in enumerate(selectable_items):
+            if item["type"] == "project":
+                is_selected = item_idx == selected_idx
+                marker = "▶" if is_selected else " "
+                style = "reverse" if is_selected else ""
+                console.print(f"\n  {marker} [bold cyan]{item['project_name']}[/bold cyan]", style=style, highlight=False)
 
-            if proj.get("warning"):
-                console.print(f"  [red]{proj['warning']}[/red]")
-
-            if not proj["sessions"]:
-                console.print("  [dim](no sessions)[/dim]")
-                continue
-
-            for s in proj["sessions"]:
+                if item.get("warning"):
+                    console.print(f"      [red]{item['warning']}[/red]")
+                elif item_idx + 1 >= len(selectable_items) or selectable_items[item_idx + 1]["type"] == "project":
+                    console.print("      [dim](no sessions)[/dim]")
+            else:
+                s = item
                 is_selected = item_idx == selected_idx
                 marker = "▶" if is_selected else " "
                 style = "reverse" if is_selected else ""
@@ -300,7 +186,7 @@ def render_dashboard(data: list[dict], selected_idx: int, selectable_items: list
                 srv_parts = []
                 for srv in s["servers"]:
                     if srv["alive"]:
-                        srv_parts.append(f"{srv['name']} [green]✓[/green] {srv['port']}")
+                        srv_parts.append(f"{srv['name']} [green]✓[/green] [link=http://localhost:{srv['port']}]{srv['port']}[/link]")
                     else:
                         srv_parts.append(f"{srv['name']} [red]✗[/red]")
                 srv_str = "  ".join(srv_parts)
@@ -311,11 +197,10 @@ def render_dashboard(data: list[dict], selected_idx: int, selectable_items: list
                 status_str = f"[{status_color}]{s['status']}[/{status_color}]"
 
                 if s["status"] == "ghost":
-                    line = f"  {marker} {s['key']:4s} {s['branch']:20s} [dim](worktree gone)[/dim]   {status_str}"
+                    line = f"      {marker} {s['key']:4s} {s['branch']:20s} [dim](worktree gone)[/dim]   {status_str}"
                 else:
-                    line = f"  {marker} {s['key']:4s} {s['branch']:20s} {srv_str}   {status_str}"
+                    line = f"      {marker} {s['key']:4s} {s['branch']:20s} {srv_str}   {status_str}"
                 console.print(line, style=style, highlight=False)
-                item_idx += 1
 
     # Footer
     console.print("\n" + "─" * console.width)
@@ -323,10 +208,17 @@ def render_dashboard(data: list[dict], selected_idx: int, selectable_items: list
 
 
 def build_selectable_items(data: list[dict]) -> list[dict]:
-    """Flatten dashboard data into a list of selectable session items."""
+    """Flatten dashboard data into a list of selectable items (projects and sessions)."""
     items = []
     for proj in data:
+        items.append({
+            "type": "project",
+            "project_name": proj["name"],
+            "project_path": proj["path"],
+            "warning": proj.get("warning"),
+        })
         for s in proj["sessions"]:
+            s["type"] = "session"
             items.append(s)
     return items
 
@@ -531,16 +423,16 @@ def do_kill_remove(orch_script: Path, session: dict):
     project = session["project_name"]
 
     if session["status"] == "ghost":
-        # Ghost session — worktree already gone, just purge from sessions.json
+        # Ghost session — worktree already gone, route through orchestrator to clean up
         if not confirm(f"Remove ghost session [bold]{name}[/bold] from [cyan]{project}[/cyan]? (y/n) "):
             console.print("[dim]Cancelled.[/dim]")
             time.sleep(0.5)
             return
-        removed = _remove_session_entry(session["project_path"], name)
-        if removed:
+        stdout, stderr, rc = run_orchestrator(orch_script, session["project_path"], ["kill", name, "--remove"])
+        if rc == 0:
             console.print(f"[green]Removed ghost session {name}.[/green]")
         else:
-            console.print(f"[yellow]Session {name} already gone.[/yellow]")
+            console.print(f"[yellow]{stderr.strip() or stdout.strip()}[/yellow]")
         console.print("\n[dim]Press any key to return...[/dim]")
         wait_for_key()
         return
@@ -609,7 +501,7 @@ def do_spawn(orch_script: Path, data: list[dict], items: list[dict], selected_id
         return
 
     console.print(f"\n[dim]Spawning session {name}...[/dim]\n")
-    run_orchestrator_live(orch_script, project_path, ["spawn", name, "--no-claude"])
+    run_orchestrator_live(orch_script, project_path, ["spawn", name])
     console.print("\n[dim]Press any key to return...[/dim]")
     wait_for_key()
 
@@ -779,22 +671,22 @@ def main():
 
             # Actions — refresh data after each
             elif key in ('r', 'ENTER'):
-                if items:
+                if items and items[selected_idx].get("type") == "session":
                     do_restart(orch_script, items[selected_idx])
                     refresh(show_indicator=False)
             elif key == 'x':
-                if items:
+                if items and items[selected_idx].get("type") == "session":
                     do_kill(orch_script, items[selected_idx])
                     refresh(show_indicator=False)
             elif key == 'X':
-                if items:
+                if items and items[selected_idx].get("type") == "session":
                     do_kill_remove(orch_script, items[selected_idx])
                     refresh(show_indicator=False)
             elif key == 's':
                 do_spawn(orch_script, data, items, selected_idx)
                 refresh(show_indicator=False)
             elif key == 'l':
-                if items:
+                if items and items[selected_idx].get("type") == "session":
                     do_logs(orch_script, items[selected_idx])
             elif key == 'c':
                 do_cleanup(orch_script, data)
