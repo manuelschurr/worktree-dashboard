@@ -636,25 +636,26 @@ def main():
         selected_idx = min(selected_idx, len(items) - 1)
     render_dashboard(data, selected_idx, items, auto_refresh)
 
+    def refresh():
+        nonlocal data, items, selected_idx
+        data = build_dashboard_data(projects)
+        items = build_selectable_items(data)
+        if not items:
+            selected_idx = 0
+        else:
+            selected_idx = min(selected_idx, len(items) - 1)
+
     try:
         while True:
             key = get_key(timeout_s=2.0 if auto_refresh else 300.0)
 
-            # On timeout (auto-refresh) or any key, reload data
-            data = build_dashboard_data(projects)
-            items = build_selectable_items(data)
-
-            if not items:
-                selected_idx = 0
-            else:
-                selected_idx = min(selected_idx, len(items) - 1)
-
             if key is None:
-                # Auto-refresh tick — just re-render
+                # Auto-refresh tick — reload data and re-render
+                refresh()
                 render_dashboard(data, selected_idx, items, auto_refresh)
                 continue
 
-            # Navigation
+            # Navigation — no data reload, just move cursor and re-render
             if key in ('UP', 'k'):
                 if items and selected_idx > 0:
                     selected_idx -= 1
@@ -666,35 +667,28 @@ def main():
             elif key == 'a':
                 auto_refresh = not auto_refresh
 
-            # Actions
+            # Actions — reload data after each
             elif key in ('r', 'ENTER'):
                 if items:
                     do_restart(orch_script, items[selected_idx])
-                    data = build_dashboard_data(projects)
-                    items = build_selectable_items(data)
+                    refresh()
             elif key == 'x':
                 if items:
                     do_kill(orch_script, items[selected_idx])
-                    data = build_dashboard_data(projects)
-                    items = build_selectable_items(data)
+                    refresh()
             elif key == 'X':
                 if items:
                     do_kill_remove(orch_script, items[selected_idx])
-                    data = build_dashboard_data(projects)
-                    items = build_selectable_items(data)
-                    if items:
-                        selected_idx = min(selected_idx, len(items) - 1)
+                    refresh()
             elif key == 's':
                 do_spawn(orch_script, data, items, selected_idx)
-                data = build_dashboard_data(projects)
-                items = build_selectable_items(data)
+                refresh()
             elif key == 'l':
                 if items:
                     do_logs(orch_script, items[selected_idx])
             elif key == 'i':
                 do_init(orch_script, data, items, selected_idx)
-                data = build_dashboard_data(projects)
-                items = build_selectable_items(data)
+                refresh()
 
             # Quit
             elif key == 'q':
