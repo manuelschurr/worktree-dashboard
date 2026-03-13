@@ -1,0 +1,35 @@
+# .orchestrator.toml — copy this to your repo root and edit.
+#
+# Secrets (DATABASE_URL, API keys) go in .orchestrator/.secrets, NOT here.
+# This file is safe to commit.
+
+[project]
+remote = "origin"
+base_branch = "main"
+branch_prefix = "feature/issue-"
+
+# Define one [servers.<name>] section per process.
+# Ports are auto-assigned. Use these placeholders:
+#   {port}              — this server's own port
+#   {backend.port}      — the "backend" server's port
+#   {frontend.port}     — the "frontend" server's port
+#
+# Commands must run non-interactively (no TTY).
+
+# Example: backend server
+# [servers.backend]
+# start_command = "dart run bin/server.dart"
+# directory = "server"
+#
+# [servers.backend.env]
+# PORT = "{backend.port}"
+# FRONTEND_URL = "http://localhost:{frontend.port}"
+# DEV_MODE = "true"
+
+# Example: frontend
+# [servers.frontend]
+# start_command = "flutter run -d web-server --web-port={frontend.port} --dart-define=API_BASE_URL=http://localhost:{backend.port}"
+
+# Example: simple web server
+# [servers.web]
+# start_command = "npm run dev -- --port {port}"
