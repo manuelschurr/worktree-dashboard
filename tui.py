@@ -173,11 +173,12 @@ def render_dashboard(data: list[dict], selected_idx: int, selectable_items: list
     console.clear()
 
     # Header
+    w = min(console.width, 80)
     header = "[bold]Worktree Dashboard[/bold]"
     if status_msg:
         header += f"  {status_msg}"
     console.print(header)
-    console.print("─" * console.width)
+    console.print("─" * w)
 
     if not data:
         console.print("\n[dim]No projects configured.[/dim]\n")
@@ -225,7 +226,7 @@ def render_dashboard(data: list[dict], selected_idx: int, selectable_items: list
                 console.print(line, style=style, highlight=False)
 
     # Footer
-    console.print("\n" + "─" * console.width)
+    console.print("\n" + "─" * w)
     console.print("[dim]↑↓/jk[/dim] navigate  [dim]R[/dim] refresh  [dim]r[/dim] restart  [dim]x[/dim] kill  [dim]X[/dim] kill+remove  [dim]s[/dim] spawn  [dim]l[/dim] logs  [dim]c[/dim] cleanup  [dim]i[/dim] init  [dim]q[/dim] quit")
 
 
