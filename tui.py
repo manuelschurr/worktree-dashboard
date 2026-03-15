@@ -207,7 +207,7 @@ def render_dashboard(data: list[dict], selected_idx: int, selectable_items: list
                     if srv["alive"]:
                         hostname = f"{sess}-{srv['name']}.{proj}.{DEFAULT_TLD}"
                         url = f"http://{hostname}:{DEFAULT_PROXY_PORT}"
-                        srv_parts.append(f"{srv['name']} [green]✓[/green] [link={url}]{hostname}[/link]")
+                        srv_parts.append(f"[link={url}]{srv['name']}[/link] [green]✓[/green]")
                     else:
                         srv_parts.append(f"{srv['name']} [red]✗[/red]")
                 srv_str = "  ".join(srv_parts)
@@ -217,10 +217,11 @@ def render_dashboard(data: list[dict], selected_idx: int, selectable_items: list
                 status_color = status_colors.get(s["status"], "white")
                 status_str = f"[{status_color}]{s['status']}[/{status_color}]"
 
+                branch = s['branch'][:16]
                 if s["status"] == "ghost":
-                    line = f"      {marker} {s['key']:4s} {s['branch']:20s} [dim](worktree gone)[/dim]   {status_str}"
+                    line = f"      {marker} {s['key']:3s} {branch:16s} [dim](worktree gone)[/dim]  {status_str}"
                 else:
-                    line = f"      {marker} {s['key']:4s} {s['branch']:20s} {srv_str}   {status_str}"
+                    line = f"      {marker} {s['key']:3s} {branch:16s} {srv_str}  {status_str}"
                 console.print(line, style=style, highlight=False)
 
     # Footer
