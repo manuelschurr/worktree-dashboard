@@ -22,7 +22,7 @@ if hasattr(sys.stdout, "reconfigure") and sys.stdout.encoding and sys.stdout.enc
 if hasattr(sys.stderr, "reconfigure") and sys.stderr.encoding and sys.stderr.encoding.lower() not in ("utf-8", "utf8"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-from orchestrator import parse_toml, is_process_alive, IS_WINDOWS, DEFAULT_PROXY_PORT, DEFAULT_TLD, ensure_proxy_running
+from orchestrator import parse_toml, is_process_alive, get_alive_pids, IS_WINDOWS, DEFAULT_PROXY_PORT, DEFAULT_TLD, ensure_proxy_running
 
 
 # ---------------------------------------------------------------------------
@@ -94,13 +94,30 @@ def build_dashboard_data(projects: list[dict]) -> list[dict]:
     - path: Path
     - sessions: list of session dicts with server health annotated
     """
-    dashboard = []
+    # Pass 1: load all sessions and collect all PIDs for a single batch check
+    project_sessions = []
+    all_pids = set()
     for proj in projects:
         if not proj["path"].is_dir():
+            project_sessions.append((proj, None))
+            continue
+        raw = load_sessions(proj["path"])
+        project_sessions.append((proj, raw))
+        for s in raw.values():
+            for srv in s.get("servers", []):
+                pid = srv.get("pid")
+                if pid is not None:
+                    all_pids.add(int(pid))
+
+    alive_pids = get_alive_pids(all_pids)
+
+    # Pass 2: build the dashboard data using the batch result
+    dashboard = []
+    for proj, raw_sessions in project_sessions:
+        if raw_sessions is None:
             dashboard.append({"name": proj["name"], "path": proj["path"], "sessions": [], "warning": "directory not found"})
             continue
 
-        raw_sessions = load_sessions(proj["path"])
         sessions = []
         for key, s in raw_sessions.items():
             wt = s.get("worktree", "")
@@ -110,7 +127,7 @@ def build_dashboard_data(projects: list[dict]) -> list[dict]:
             servers = []
             for srv in s.get("servers", []):
                 pid = srv.get("pid")
-                alive = is_process_alive(pid) if pid else False
+                alive = (int(pid) in alive_pids) if pid is not None else False
                 servers.append({
                     "name": srv.get("name", "?"),
                     "port": srv.get("port"),
