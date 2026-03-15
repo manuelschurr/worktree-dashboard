@@ -22,7 +22,7 @@ if hasattr(sys.stdout, "reconfigure") and sys.stdout.encoding and sys.stdout.enc
 if hasattr(sys.stderr, "reconfigure") and sys.stderr.encoding and sys.stderr.encoding.lower() not in ("utf-8", "utf8"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-from orchestrator import parse_toml, is_process_alive, IS_WINDOWS
+from orchestrator import parse_toml, is_process_alive, IS_WINDOWS, DEFAULT_PROXY_PORT, DEFAULT_TLD, ensure_proxy_running
 
 
 # ---------------------------------------------------------------------------
@@ -182,11 +182,15 @@ def render_dashboard(data: list[dict], selected_idx: int, selectable_items: list
                 marker = "▶" if is_selected else " "
                 style = "reverse" if is_selected else ""
 
-                # Build server status string (format: "backend ✓ 64785")
+                # Build server status string with hostname links
                 srv_parts = []
+                proj = s.get("project_name", "")
+                sess = s.get("key", "")
                 for srv in s["servers"]:
                     if srv["alive"]:
-                        srv_parts.append(f"{srv['name']} [green]✓[/green] [link=http://localhost:{srv['port']}]{srv['port']}[/link]")
+                        hostname = f"{sess}-{srv['name']}.{proj}.{DEFAULT_TLD}"
+                        url = f"http://{hostname}:{DEFAULT_PROXY_PORT}"
+                        srv_parts.append(f"{srv['name']} [green]✓[/green] [link={url}]{hostname}[/link]")
                     else:
                         srv_parts.append(f"{srv['name']} [red]✗[/red]")
                 srv_str = "  ".join(srv_parts)
@@ -628,6 +632,7 @@ def do_cleanup(orch_script: Path, data: list[dict]):
 def main():
     orch_script = find_orchestrator_script()
     projects = load_dashboard_config()
+    ensure_proxy_running()
 
     selected_idx = 0
     status_msg = ""

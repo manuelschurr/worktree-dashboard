@@ -8,7 +8,9 @@ Interactive TUI for managing parallel git worktree sessions with dev servers, ac
 
 - **Multi-project view** — monitor worktree sessions from multiple projects in one place
 - **Keyboard-driven** — navigate, spawn, kill, restart, view logs, and clean up without leaving the terminal
-- **Clickable port links** — server ports are OSC 8 hyperlinks; click to open in your browser
+- **Stable hostname URLs** — servers get human-readable `.localhost` hostnames (e.g. `b1-frontend.myapp.localhost:1337`) via a built-in reverse proxy, so you can bookmark URLs that survive restarts
+- **Deterministic ports** — ports are derived from project/session/server names, so they never change across restarts
+- **Clickable hostname links** — server hostnames are OSC 8 hyperlinks in the TUI; click to open in your browser
 - **Live server health** — per-server UP/DOWN status via PID checks
 - **Robust removal** — detects locked worktrees (e.g. still in use by another process) and reports actionable errors instead of silently failing
 - **Claude terminal on spawn** — new sessions automatically open a Claude Code terminal in the worktree
@@ -81,6 +83,21 @@ Add as many `[[projects]]` entries as you like — they all appear in the dashbo
 
 Session-specific actions (`r`, `x`, `X`, `l`) only work when a session row is selected. `s` and `i` work on both project headers and session rows.
 
+## Reverse Proxy
+
+The orchestrator includes a built-in reverse proxy that gives each server a stable, human-readable hostname. The proxy starts automatically in the background on first `spawn`/`restart` or when the TUI launches — no manual setup needed. It's idempotent: multiple launches safely detect the existing instance via port check.
+
+You can also start it manually if needed:
+
+```bash
+python orchestrator.py proxy            # default port 1337
+python orchestrator.py proxy -p 8080    # custom port
+```
+
+Hostnames follow the convention `{session}-{server}.{project}.localhost` (e.g. `b1-frontend.myapp.localhost:1337`), with a shortcut `{session}.{project}.localhost` for the first server. Routes are registered automatically on spawn/restart and removed on kill/cleanup via a shared `~/.orchestrator/routes.json` file.
+
+`.localhost` resolves to `127.0.0.1` automatically in Chrome, Edge, and Firefox — no hosts file or DNS config needed.
+
 ## How It Works
 
 The dashboard reads each project's `.orchestrator/sessions.json` to build the display. All actions shell out to `orchestrator.py`, which handles worktree creation, server lifecycle, and session tracking.
@@ -89,7 +106,7 @@ Sessions are shown with real-time health: server PIDs are checked to determine i
 
 ## Pairing with the Claude Code Skill
 
-This dashboard is fully standalone — it includes everything you need. If you also use [Claude Code](https://claude.ai/claude-code), there's a companion skill called [worktree-orchestrator](https://github.com/manuelschurr/worktree-orchestrator) that lets Claude manage worktree sessions conversationally. Both share the same `orchestrator.py` engine, so projects work with either or both.
+This dashboard is fully standalone — it includes everything you need. If you also use [Claude Code](https://claude.ai/claude-code), there's a companion skill called [worktree-orchestrator](https://github.com/manuelschurr/worktree-orchestrator) that lets Claude manage worktree sessions conversationally. Both bundle their own copy of `orchestrator.py` (kept in sync), so projects work with either or both. The reverse proxy and route table (`~/.orchestrator/routes.json`) are shared — sessions spawned from either tool are accessible through the same proxy.
 
 ## License
 
