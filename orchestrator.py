@@ -629,8 +629,14 @@ def cmd_init(args):
     # Define one [servers.<name>] section per process your project needs.
     # Ports are auto-assigned. Use these placeholders in start_command and env values:
     #   {{port}}              - this server's own port
+    #   {{url}}               - this server's proxy URL (e.g. http://b1-web.myapp.localhost:1337)
     #   {{backend.port}}      - the "backend" server's port (use any server name)
+    #   {{backend.url}}       - the "backend" server's proxy URL
     #   {{frontend.port}}     - the "frontend" server's port
+    #   {{frontend.url}}      - the "frontend" server's proxy URL
+    #
+    # NOTE: Use {{*.url}} for CORS, API base URLs, etc. (browsers resolve .localhost fine).
+    # Use http://localhost:{{*.port}} for OAuth redirect URIs (Google rejects .localhost subdomains).
     #
     # Secrets (DATABASE_URL, API keys) go in .orchestrator/.secrets
     # and are loaded into every server's environment automatically.
@@ -650,13 +656,13 @@ def cmd_init(args):
     #
     # [servers.backend.env]
     # PORT = "{{backend.port}}"
-    # FRONTEND_URL = "http://localhost:{{frontend.port}}"
-    # ALLOWED_ORIGIN = "http://localhost:{{frontend.port}}"
+    # FRONTEND_URL = "{{frontend.url}}"
+    # ALLOWED_ORIGIN = "{{frontend.url}}"
     # DEV_MODE = "true"
 
     # -- Example: Flutter frontend that needs the backend port --
     # [servers.frontend]
-    # start_command = "flutter run -d web-server --web-port={{frontend.port}} --dart-define=API_BASE_URL=http://localhost:{{backend.port}} --dart-define=DEV_MODE=true"
+    # start_command = "flutter run -d web-server --web-port={{frontend.port}} --dart-define=API_BASE_URL={{backend.url}} --dart-define=DEV_MODE=true"
 
     # -- Example: simple static site --
     # [servers.web]
