@@ -175,7 +175,7 @@ def load_config(repo_root: Path) -> dict:
     return {
         "remote": project.get("remote", "origin"),
         "base_branch": project.get("base_branch", "main"),
-        "branch_prefix": project.get("branch_prefix", "feature/issue-"),
+        "branch_prefix": project.get("branch_prefix", "b"),
         "servers": servers,
     }
 
@@ -441,23 +441,33 @@ def worktree_base_dir(repo_root: Path) -> Path:
     return (repo_root.parent / "worktrees" / project_name(repo_root)).resolve()
 
 
-def substitute_vars(text: str, port_map: dict, current_server: str = "") -> str:
-    """Replace port placeholders in a string.
+def substitute_vars(text: str, port_map: dict, current_server: str = "",
+                    project: str = "", session: str = "") -> str:
+    """Replace port and URL placeholders in a string.
 
     Supports:
-      {port}             - current server's own port
-      {servername.port}  - named server's port
+      {port}                  - current server's own port
+      {servername.port}       - named server's port
+      {url}                   - current server's proxy URL
+      {servername.url}        - named server's proxy URL
     """
     for srv_name, port in port_map.items():
         text = text.replace(f"{{{srv_name}.port}}", str(port))
+        if project and session:
+            url = f"http://{session}-{srv_name}.{project}.{DEFAULT_TLD}:{DEFAULT_PROXY_PORT}"
+            text = text.replace(f"{{{srv_name}.url}}", url)
     if current_server and current_server in port_map:
         text = text.replace("{port}", str(port_map[current_server]))
+        if project and session:
+            text = text.replace("{url}",
+                f"http://{session}-{current_server}.{project}.{DEFAULT_TLD}:{DEFAULT_PROXY_PORT}")
     return text
 
 
 def open_terminal_with_claude(worktree_path: Path, session_name: str):
     """Open a new terminal window running claude in the worktree directory."""
     wt_str = str(worktree_path)
+    claude_cmd = "claude --dangerously-skip-permissions"
 
     # Strip CLAUDECODE env var so the new terminal isn't detected as a nested session
     clean_env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
@@ -472,13 +482,13 @@ def open_terminal_with_claude(worktree_path: Path, session_name: str):
                 subprocess.Popen(
                     ["wt", "-w", "new", "-d", wt_str,
                      "--title", f"claude [{session_name}]",
-                     "cmd", "/k", "claude"],
+                     "cmd", "/k", claude_cmd],
                     env=clean_env,
                     creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
                 )
             else:
                 subprocess.Popen(
-                    f'start "claude [{session_name}]" cmd /k "cd /d {wt_str} && claude"',
+                    f'start "claude [{session_name}]" cmd /k "cd /d {wt_str} && {claude_cmd}"',
                     shell=True,
                     env=clean_env,
                     creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
@@ -487,7 +497,7 @@ def open_terminal_with_claude(worktree_path: Path, session_name: str):
             # macOS: use AppleScript to open Terminal.app — unset CLAUDECODE inline
             script = (
                 f'tell application "Terminal"\n'
-                f'  do script "unset CLAUDECODE && cd {wt_str} && claude"\n'
+                f'  do script "unset CLAUDECODE && cd {wt_str} && {claude_cmd}"\n'
                 f'  activate\n'
                 f'end tell'
             )
@@ -495,10 +505,10 @@ def open_terminal_with_claude(worktree_path: Path, session_name: str):
         else:
             # Linux: try common terminal emulators
             for term_cmd in [
-                ["gnome-terminal", "--", "bash", "-c", f"unset CLAUDECODE && cd {wt_str} && claude; exec bash"],
-                ["xfce4-terminal", "-e", f"bash -c 'unset CLAUDECODE && cd {wt_str} && claude; exec bash'"],
-                ["konsole", "-e", "bash", "-c", f"unset CLAUDECODE && cd {wt_str} && claude; exec bash"],
-                ["xterm", "-e", f"bash -c 'unset CLAUDECODE && cd {wt_str} && claude; exec bash'"],
+                ["gnome-terminal", "--", "bash", "-c", f"unset CLAUDECODE && cd {wt_str} && {claude_cmd}; exec bash"],
+                ["xfce4-terminal", "-e", f"bash -c 'unset CLAUDECODE && cd {wt_str} && {claude_cmd}; exec bash'"],
+                ["konsole", "-e", "bash", "-c", f"unset CLAUDECODE && cd {wt_str} && {claude_cmd}; exec bash"],
+                ["xterm", "-e", f"bash -c 'unset CLAUDECODE && cd {wt_str} && {claude_cmd}; exec bash'"],
             ]:
                 try:
                     subprocess.Popen(term_cmd, env=clean_env)
@@ -507,13 +517,13 @@ def open_terminal_with_claude(worktree_path: Path, session_name: str):
                     continue
             else:
                 print(f"  Could not detect terminal emulator. Run manually:")
-                print(f"    cd {wt_str} && claude")
+                print(f"    cd {wt_str} && {claude_cmd}")
                 return
 
         print(f"  Opened new terminal with claude in {wt_str}")
     except Exception as e:
         print(f"  Could not open terminal: {e}")
-        print(f"  Run manually: cd {wt_str} && claude")
+        print(f"  Run manually: cd {wt_str} && {claude_cmd}")
 
 
 def _rmtree_robust(path: Path, retries: int = 3, delay: float = 1.0) -> bool:
@@ -611,7 +621,7 @@ def cmd_init(args):
     [project]
     remote = "origin"
     base_branch = "{base}"
-    branch_prefix = "feature/issue-"
+    branch_prefix = "b"
 
     # -------------------------------------------------------------------
     # Servers
@@ -763,10 +773,10 @@ def cmd_spawn(args):
         proc_env = os.environ.copy()
         proc_env.update(secrets)
         for key, val in srv_cfg.get("env", {}).items():
-            proc_env[key] = substitute_vars(val, port_map, srv_name)
+            proc_env[key] = substitute_vars(val, port_map, srv_name, proj, name)
 
         # Substitute ports in start_command
-        cmd = substitute_vars(srv_cfg["start_command"], port_map, srv_name)
+        cmd = substitute_vars(srv_cfg["start_command"], port_map, srv_name, proj, name)
 
         log_file = session_logs_dir(repo_root, name) / f"{srv_name}.log"
 
@@ -993,9 +1003,9 @@ def cmd_restart(args):
         proc_env = os.environ.copy()
         proc_env.update(secrets)
         for key, val in srv_cfg.get("env", {}).items():
-            proc_env[key] = substitute_vars(val, port_map, srv_name)
+            proc_env[key] = substitute_vars(val, port_map, srv_name, proj, name)
 
-        cmd = substitute_vars(srv_cfg["start_command"], port_map, srv_name)
+        cmd = substitute_vars(srv_cfg["start_command"], port_map, srv_name, proj, name)
 
         log_file = session_logs_dir(repo_root, name) / f"{srv_name}.log"
 
