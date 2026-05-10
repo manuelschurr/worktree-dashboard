@@ -366,6 +366,76 @@ def get_key(timeout_s: float = 2.0) -> str | None:
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 
+def prompt_with_escape(prompt: str) -> str | None:
+    """Prompt for a single line of input. Returns the entered string, or None if
+    the user pressed Esc / Ctrl-C / Ctrl-D / Enter on empty input.
+
+    Char-by-char loop with Backspace and Esc support. No line history.
+    """
+    sys.stdout.write(prompt)
+    sys.stdout.flush()
+    chars: list[str] = []
+
+    def finish(value):
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+        return value
+
+    if IS_WINDOWS:
+        import msvcrt
+        while True:
+            ch = msvcrt.getwch()
+            if ch in ("\x00", "\xe0"):  # Special-key prefix — discard scan code (arrows, F-keys, etc.)
+                msvcrt.getwch()
+                continue
+            if ch == "\r":
+                return finish("".join(chars).strip() or None)
+            if ch in ("\x1b", "\x03", "\x04"):  # Esc / Ctrl-C / Ctrl-D
+                return finish(None)
+            if ch == "\b":
+                if chars:
+                    chars.pop()
+                    sys.stdout.write("\b \b")
+                    sys.stdout.flush()
+                continue
+            chars.append(ch)
+            sys.stdout.write(ch)
+            sys.stdout.flush()
+    else:
+        import select
+        import termios
+        import tty
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            while True:
+                ch = sys.stdin.read(1)
+                if ch in ("\r", "\n"):
+                    return finish("".join(chars).strip() or None)
+                if ch == "\x1b":
+                    # Bare Esc cancels; an escape sequence (arrows etc.) is drained and ignored.
+                    if select.select([sys.stdin], [], [], 0.05)[0]:
+                        sys.stdin.read(1)
+                        if select.select([sys.stdin], [], [], 0.001)[0]:
+                            sys.stdin.read(1)
+                        continue
+                    return finish(None)
+                if ch in ("\x03", "\x04"):
+                    return finish(None)
+                if ch in ("\x7f", "\b"):
+                    if chars:
+                        chars.pop()
+                        sys.stdout.write("\b \b")
+                        sys.stdout.flush()
+                    continue
+                chars.append(ch)
+                sys.stdout.write(ch)
+                sys.stdout.flush()
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
 def restore_terminal():
     """Restore terminal to cooked mode (Unix only, no-op on Windows)."""
     if not IS_WINDOWS:
@@ -711,12 +781,9 @@ def do_add_project(projects: list[dict]) -> str:
     """
     restore_terminal()
     console.clear()
-    console.print("[bold]Add project[/bold]")
-    try:
-        raw = input("Project path: ").strip()
-    except (EOFError, KeyboardInterrupt):
-        return ""
-    if not raw:
+    console.print("[bold]Add project[/bold] [dim](Esc to cancel)[/dim]")
+    raw = prompt_with_escape("Project path: ")
+    if raw is None:
         return ""
 
     # Strip surrounding quotes and expand ~
@@ -810,7 +877,10 @@ def main():
             selected_idx = 0
         else:
             selected_idx = min(selected_idx, len(items) - 1)
-        status_msg = "[green]refreshed[/green]"
+        # Only announce "refreshed" when the user asked explicitly. Post-action
+        # refreshes leave status_msg untouched so the action's own message wins.
+        if show_indicator:
+            status_msg = "[green]refreshed[/green]"
 
     try:
         while True:
