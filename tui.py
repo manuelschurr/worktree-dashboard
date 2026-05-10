@@ -14,6 +14,7 @@ import os
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Fix stdout encoding on Windows cp1252 consoles
@@ -23,6 +24,36 @@ if hasattr(sys.stderr, "reconfigure") and sys.stderr.encoding and sys.stderr.enc
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 from orchestrator import parse_toml, is_process_alive, get_alive_pids, IS_WINDOWS, DEFAULT_PROXY_PORT, DEFAULT_TLD, ensure_proxy_running
+
+
+def humanize_relative(iso_str: str | None) -> str:
+    """Render an ISO 8601 timestamp as a short '5m ago' / '2h ago' / '3d ago' / '4w ago' string.
+
+    Returns '—' for None or unparseable input. Naive datetimes are treated as UTC.
+    """
+    if not iso_str:
+        return "—"
+    try:
+        dt = datetime.fromisoformat(iso_str)
+    except (ValueError, TypeError):
+        return "—"
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    delta = datetime.now(timezone.utc) - dt
+    secs = int(delta.total_seconds())
+    if secs < 60:
+        return "<1m ago"
+    mins = secs // 60
+    if mins < 60:
+        return f"{mins}m ago"
+    hours = mins // 60
+    if hours < 24:
+        return f"{hours}h ago"
+    days = hours // 24
+    if days < 7:
+        return f"{days}d ago"
+    weeks = days // 7
+    return f"{weeks}w ago"
 
 
 # ---------------------------------------------------------------------------
