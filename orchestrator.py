@@ -813,6 +813,7 @@ def cmd_spawn(args):
         print("No servers configured - worktree created without servers.")
 
     # Register session
+    now_iso = datetime.now(timezone.utc).isoformat()
     sessions[name] = {
         "name": name,
         "branch": branch,
@@ -820,7 +821,8 @@ def cmd_spawn(args):
         "servers": server_records,
         "ports": port_map,
         "status": "running",
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": now_iso,
+        "started_at": now_iso,
     }
     save_sessions(repo_root, sessions)
     register_proxy_routes(proj, name, port_map)
@@ -1041,6 +1043,7 @@ def cmd_restart(args):
     s["servers"] = server_records
     s["ports"] = port_map
     s["status"] = "running"
+    s["started_at"] = datetime.now(timezone.utc).isoformat()
     save_sessions(repo_root, sessions)
     register_proxy_routes(proj, name, port_map)
     ensure_proxy_running()
