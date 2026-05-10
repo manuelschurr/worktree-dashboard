@@ -746,6 +746,39 @@ def do_add_project(projects: list[dict]) -> str:
     return f"[green]added {path.name}[/green]"
 
 
+def do_remove_project(projects: list[dict], item: dict) -> str:
+    """Confirm and remove the selected project from config.toml.
+
+    `item` must be a project-row item. Sessions and worktrees on disk are not
+    touched. Returns a status message to surface in the dashboard header.
+    """
+    restore_terminal()
+    console.clear()
+    name = item["project_name"]
+    target = item["project_path"]
+    console.print(f"[bold]Remove project [cyan]{name}[/cyan] from config?[/bold]")
+    console.print("[dim](Sessions and worktrees on disk are untouched.)[/dim]")
+    if not confirm("Proceed? (y/n) "):
+        console.print("[dim]Cancelled.[/dim]")
+        time.sleep(0.5)
+        return ""
+
+    def norm(p: Path) -> str:
+        s = str(p).replace("\\", "/")
+        return s.lower() if IS_WINDOWS else s
+
+    new_paths = [proj["path"] for proj in projects if norm(proj["path"]) != norm(target)]
+    if len(new_paths) == len(projects):
+        return "[yellow]not found in config[/yellow]"
+    if not new_paths:
+        console.print("[red]Cannot remove the last project (TUI requires at least one).[/red]")
+        console.print("\n[dim]Press any key to return...[/dim]")
+        wait_for_key()
+        return "[red]cannot remove last project[/red]"
+    write_dashboard_config(new_paths)
+    return f"[green]removed {name}[/green]"
+
+
 # ---------------------------------------------------------------------------
 # Main event loop
 # ---------------------------------------------------------------------------
@@ -832,6 +865,15 @@ def main():
                 refresh(show_indicator=False)
                 if msg:
                     status_msg = msg
+            elif key == 'D':
+                if items and 0 <= selected_idx < len(items) and items[selected_idx].get("type") == "project":
+                    msg = do_remove_project(projects, items[selected_idx])
+                    projects = load_dashboard_config()
+                    refresh(show_indicator=False)
+                    if msg:
+                        status_msg = msg
+                else:
+                    status_msg = "[dim]select a project row to remove[/dim]"
 
             # Quit
             elif key == 'q':
