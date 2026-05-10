@@ -26,6 +26,12 @@ if hasattr(sys.stderr, "reconfigure") and sys.stderr.encoding and sys.stderr.enc
 from orchestrator import parse_toml, is_process_alive, get_alive_pids, IS_WINDOWS, DEFAULT_PROXY_PORT, DEFAULT_TLD, ensure_proxy_running
 
 
+SERVER_LABELS = {
+    "backend": "BE",
+    "frontend": "FE",
+}
+
+
 def humanize_relative(iso_str: str | None) -> str:
     """Render an ISO 8601 timestamp as a short '5m ago' / '2h ago' / '3d ago' / '4w ago' string.
 
@@ -232,29 +238,28 @@ def render_dashboard(data: list[dict], selected_idx: int, selectable_items: list
                 marker = "▶" if is_selected else " "
                 style = "reverse" if is_selected else ""
 
-                # Build server status string with hostname links
+                # Build server status string with hostname links and BE/FE labels
                 srv_parts = []
                 proj = s.get("project_name", "")
                 sess = s.get("key", "")
                 for srv in s["servers"]:
+                    label = SERVER_LABELS.get(srv["name"], srv["name"])
                     if srv["alive"]:
                         hostname = f"{sess}-{srv['name']}.{proj}.{DEFAULT_TLD}"
                         url = f"http://{hostname}:{DEFAULT_PROXY_PORT}"
-                        srv_parts.append(f"[link={url}]{srv['name']}[/link] [green]✓[/green]")
+                        srv_parts.append(f"[link={url}]{label}[/link] [green]✓[/green]")
                     else:
-                        srv_parts.append(f"{srv['name']} [red]✗[/red]")
+                        srv_parts.append(f"{label} [red]✗[/red]")
                 srv_str = "  ".join(srv_parts)
 
-                # Status color
-                status_colors = {"running": "green", "stopped": "yellow", "dead": "red", "ghost": "dim red"}
-                status_color = status_colors.get(s["status"], "white")
-                status_str = f"[{status_color}]{s['status']}[/{status_color}]"
+                age = humanize_relative(s.get("started_at"))
+                age_str = f"[dim]{age}[/dim]"
 
                 branch = s['branch'][:16]
                 if s["status"] == "ghost":
-                    line = f"      {marker} {s['key']:3s} {branch:16s} [dim](worktree gone)[/dim]  {status_str}"
+                    line = f"      {marker} {s['key']:3s} {branch:16s} [dim](worktree gone)[/dim]  {age_str}"
                 else:
-                    line = f"      {marker} {s['key']:3s} {branch:16s} {srv_str}  {status_str}"
+                    line = f"      {marker} {s['key']:3s} {branch:16s} {srv_str}  {age_str}"
                 console.print(line, style=style, highlight=False)
 
     # Footer
