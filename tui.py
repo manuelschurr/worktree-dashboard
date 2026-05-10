@@ -106,6 +106,28 @@ def load_dashboard_config() -> list[dict]:
     return [{"path": Path(p["path"]), "name": Path(p["path"]).name} for p in projects if "path" in p]
 
 
+def write_dashboard_config(project_paths: list[Path]) -> None:
+    """Rewrite config.toml with the given project paths. Atomic via tmp+replace.
+
+    Comments in the existing file are not preserved — the live config becomes a
+    generated list. Documentation lives in config.example.toml.
+    """
+    lines = []
+    for i, p in enumerate(project_paths):
+        if i > 0:
+            lines.append("")
+        lines.append("[[projects]]")
+        # Forward slashes match the existing convention and avoid TOML escape issues.
+        normalized = str(p).replace("\\", "/")
+        lines.append(f'path = "{normalized}"')
+    lines.append("")  # trailing newline
+    text = "\n".join(lines)
+
+    tmp = CONFIG_PATH.with_suffix(CONFIG_PATH.suffix + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, CONFIG_PATH)
+
+
 # ---------------------------------------------------------------------------
 # Session data
 # ---------------------------------------------------------------------------
