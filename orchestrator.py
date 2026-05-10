@@ -896,9 +896,12 @@ def cmd_logs(args):
     for log_file in log_files:
         srv_name = log_file.stem
         lines = log_file.read_text(encoding="utf-8", errors="replace").splitlines()
-        if len(lines) > n:
+        if n > 0 and len(lines) > n:
             lines = lines[-n:]
-        print(f"--- {srv_name} (last {min(n, len(lines))} lines) ---")
+            header = f"--- {srv_name} (last {len(lines)} lines) ---"
+        else:
+            header = f"--- {srv_name} ({len(lines)} lines) ---"
+        print(header)
         for line in lines:
             print(line)
         print()
@@ -1285,7 +1288,7 @@ def main():
     p_logs.add_argument("server", nargs="?", default=None,
                         help="Server name (omit to show all)")
     p_logs.add_argument("-n", "--lines", type=int, default=50,
-                        help="Lines to show (default: 50)")
+                        help="Lines to show (default: 50; 0 = all)")
 
     p_kill = sub.add_parser("kill", help="Stop all servers in a session")
     p_kill.add_argument("name", help="Session name")

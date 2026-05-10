@@ -679,7 +679,7 @@ def do_logs(orch_script: Path, session: dict):
 
     console.print(f"[bold]Logs for session {name} ({project})[/bold]\n")
 
-    stdout, stderr, rc = run_orchestrator(orch_script, session["project_path"], ["logs", name])
+    stdout, stderr, rc = run_orchestrator(orch_script, session["project_path"], ["logs", name, "-n", "0"])
     console.print(stdout)
     if stderr:
         console.print(f"[red]{stderr}[/red]")
