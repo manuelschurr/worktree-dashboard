@@ -286,7 +286,8 @@ def render_dashboard(data: list[dict], selected_idx: int, selectable_items: list
 
     # Footer
     console.print("\n" + "─" * w)
-    console.print("[dim]↑↓/jk[/dim] navigate  [dim]R[/dim] refresh  [dim]r[/dim] restart  [dim]x[/dim] kill  [dim]X[/dim] kill+remove  [dim]s[/dim] spawn  [dim]l[/dim] logs  [dim]c[/dim] cleanup  [dim]i[/dim] init  [dim]q[/dim] quit")
+    console.print("[dim]↑↓/jk[/dim] nav  [dim]R[/dim] refresh  [dim]r[/dim] restart  [dim]x[/dim] kill  [dim]X[/dim] kill+rm  [dim]s[/dim] spawn  [dim]l[/dim] logs")
+    console.print("[dim]c[/dim] cleanup  [dim]i[/dim] init  [dim]a[/dim] add-proj  [dim]D[/dim] rm-proj  [dim]q[/dim] quit")
 
 
 def build_selectable_items(data: list[dict]) -> list[dict]:
