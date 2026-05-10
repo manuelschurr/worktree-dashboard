@@ -703,6 +703,49 @@ def do_cleanup(orch_script: Path, data: list[dict]):
     wait_for_key()
 
 
+def do_add_project(projects: list[dict]) -> str:
+    """Prompt for a project path and append it to config.toml.
+
+    Returns a status message to surface in the dashboard header.
+    """
+    restore_terminal()
+    console.clear()
+    console.print("[bold]Add project[/bold]")
+    try:
+        raw = input("Project path: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return ""
+    if not raw:
+        return ""
+
+    # Strip surrounding quotes and expand ~
+    if (raw.startswith('"') and raw.endswith('"')) or (raw.startswith("'") and raw.endswith("'")):
+        raw = raw[1:-1]
+    path = Path(os.path.expanduser(raw)).resolve()
+
+    if not path.is_dir():
+        console.print(f"[red]Not a directory: {path}[/red]")
+        console.print("\n[dim]Press any key to return...[/dim]")
+        wait_for_key()
+        return "[red]add cancelled[/red]"
+
+    # Duplicate check (case-insensitive on Windows)
+    def norm(p: Path) -> str:
+        s = str(p).replace("\\", "/")
+        return s.lower() if IS_WINDOWS else s
+
+    existing = [proj["path"] for proj in projects]
+    if any(norm(p) == norm(path) for p in existing):
+        console.print(f"[yellow]Already in config: {path}[/yellow]")
+        console.print("\n[dim]Press any key to return...[/dim]")
+        wait_for_key()
+        return "[yellow]already in config[/yellow]"
+
+    new_paths = existing + [path]
+    write_dashboard_config(new_paths)
+    return f"[green]added {path.name}[/green]"
+
+
 # ---------------------------------------------------------------------------
 # Main event loop
 # ---------------------------------------------------------------------------
@@ -783,6 +826,12 @@ def main():
             elif key == 'i':
                 do_init(orch_script, data, items, selected_idx)
                 refresh(show_indicator=False)
+            elif key == 'a':
+                msg = do_add_project(projects)
+                projects = load_dashboard_config()
+                refresh(show_indicator=False)
+                if msg:
+                    status_msg = msg
 
             # Quit
             elif key == 'q':
