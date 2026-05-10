@@ -179,6 +179,7 @@ def build_dashboard_data(projects: list[dict]) -> list[dict]:
                 "branch": s.get("branch", "?"),
                 "servers": servers,
                 "status": status,
+                "started_at": s.get("started_at") or s.get("created_at"),
                 "project_path": proj["path"],
                 "project_name": proj["name"],
             })
