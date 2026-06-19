@@ -80,3 +80,29 @@ def test_should_record_access():
     assert orchestrator.should_record_access(recent, now) is False
     old = (now - timedelta(seconds=40)).isoformat()
     assert orchestrator.should_record_access(old, now) is True
+
+def test_substitute_url_primary_vs_nonprimary():
+    pm = {"frontend": 10241, "backend": 50022}
+    out = orchestrator.substitute_vars("{frontend.url} {backend.url}", pm,
+                                       project="scout", session="3",
+                                       primary_server="frontend")
+    assert out == "http://3.scout.localhost:1337 http://3-backend.scout.localhost:1337"
+
+def test_substitute_url_honors_env(monkeypatch):
+    monkeypatch.setenv("ORCH_TLD", "rookpine.com")
+    monkeypatch.setenv("ORCH_SCHEME", "https")
+    monkeypatch.setenv("ORCH_URL_PORT", "")
+    out = orchestrator.substitute_vars("{frontend.url}", {"frontend": 1},
+                                       project="scout", session="3",
+                                       primary_server="frontend")
+    assert out == "https://3.scout.rookpine.com"
+
+def test_unregister_honors_env_tld(tmp_path, monkeypatch):
+    monkeypatch.setattr(orchestrator, "PROXY_ROUTES_FILE", tmp_path / "routes.json")
+    monkeypatch.setattr(orchestrator, "PROXY_DIR", tmp_path)
+    monkeypatch.setenv("ORCH_TLD", "rookpine.com")
+    orchestrator.register_proxy_routes("scout", "3", {"frontend": 1, "backend": 2},
+                                       primary_server="frontend")
+    assert "3.scout.rookpine.com" in orchestrator.load_proxy_routes()
+    orchestrator.unregister_proxy_routes("scout", "3")
+    assert orchestrator.load_proxy_routes() == {}

@@ -129,7 +129,7 @@ ACCESS_FILE = PROXY_DIR / "access.json"
 DEFAULT_PROXY_PORT = 1337
 DEFAULT_TLD = "localhost"
 
-def _tld():    return os.environ.get("ORCH_TLD", "localhost")
+def _tld():    return os.environ.get("ORCH_TLD", DEFAULT_TLD)
 def _scheme(): return os.environ.get("ORCH_SCHEME", "http")
 def _proxy_port(): return int(os.environ.get("ORCH_PROXY_PORT", str(DEFAULT_PROXY_PORT)))
 
@@ -354,7 +354,7 @@ def save_proxy_routes(routes: dict):
     PROXY_ROUTES_FILE.write_text(json.dumps(routes, indent=2), encoding="utf-8")
 
 
-def register_proxy_routes(project, session, port_map, tld=None, primary_server=None):
+def register_proxy_routes(project, session, port_map, primary_server=None):
     """Register hostname->port mappings for a session's servers.
 
     If primary_server is set, the bare `{session}.{project}.{tld}` host points to
@@ -374,11 +374,10 @@ def register_proxy_routes(project, session, port_map, tld=None, primary_server=N
     save_proxy_routes(routes)
 
 
-def unregister_proxy_routes(project: str, session: str,
-                            tld: str = DEFAULT_TLD):
+def unregister_proxy_routes(project: str, session: str):
     """Remove all hostname->port mappings for a session."""
     routes = load_proxy_routes()
-    suffix = f".{project}.{tld}"
+    suffix = f".{project}.{_tld()}"
     to_remove = [h for h in routes
                  if h.endswith(suffix)
                  and (h.startswith(f"{session}.") or h.startswith(f"{session}-"))]
@@ -496,7 +495,8 @@ def worktree_base_dir(repo_root: Path) -> Path:
 
 
 def substitute_vars(text: str, port_map: dict, current_server: str = "",
-                    project: str = "", session: str = "") -> str:
+                    project: str = "", session: str = "",
+                    primary_server: str = None) -> str:
     """Replace port and URL placeholders in a string.
 
     Supports:
@@ -508,13 +508,13 @@ def substitute_vars(text: str, port_map: dict, current_server: str = "",
     for srv_name, port in port_map.items():
         text = text.replace(f"{{{srv_name}.port}}", str(port))
         if project and session:
-            url = f"http://{session}-{srv_name}.{project}.{DEFAULT_TLD}:{DEFAULT_PROXY_PORT}"
+            url = proxy_url(session, srv_name, project, primary=(srv_name == primary_server))
             text = text.replace(f"{{{srv_name}.url}}", url)
     if current_server and current_server in port_map:
         text = text.replace("{port}", str(port_map[current_server]))
         if project and session:
             text = text.replace("{url}",
-                f"http://{session}-{current_server}.{project}.{DEFAULT_TLD}:{DEFAULT_PROXY_PORT}")
+                proxy_url(session, current_server, project, primary=(current_server == primary_server)))
     return text
 
 
@@ -882,6 +882,7 @@ def cmd_spawn(args):
 
     # Phase 2: Load secrets once (shared across all servers)
     secrets = load_secrets(repo_root)
+    primary_server = next((s["name"] for s in config["servers"] if s.get("primary")), None)
 
     # Phase 3: Start each server
     server_records = []
@@ -897,17 +898,20 @@ def cmd_spawn(args):
         proc_env = os.environ.copy()
         proc_env.update(secrets)
         for key, val in srv_cfg.get("env", {}).items():
-            proc_env[key] = substitute_vars(val, port_map, srv_name, proj, name)
+            proc_env[key] = substitute_vars(val, port_map, srv_name, proj, name,
+                                            primary_server=primary_server)
 
         # Substitute ports in start_command
-        cmd = substitute_vars(srv_cfg["start_command"], port_map, srv_name, proj, name)
+        cmd = substitute_vars(srv_cfg["start_command"], port_map, srv_name, proj, name,
+                              primary_server=primary_server)
 
         log_file = session_logs_dir(repo_root, name) / f"{srv_name}.log"
         log_handle = open(log_file, "w", encoding="utf-8")
 
         # Run the setup step (e.g. `dart pub get`) before starting the server.
         setup_cmd = substitute_vars(srv_cfg.get("setup_command", ""),
-                                    port_map, srv_name, proj, name)
+                                    port_map, srv_name, proj, name,
+                                    primary_server=primary_server)
         if not run_setup_command(setup_cmd, cwd, proc_env, log_handle, srv_name):
             log_handle.close()
             setup_failed = True
@@ -959,7 +963,6 @@ def cmd_spawn(args):
         "started_at": now_iso,
     }
     save_sessions(repo_root, sessions)
-    primary_server = next((s["name"] for s in config["servers"] if s.get("primary")), None)
     register_proxy_routes(proj, name, port_map, primary_server=primary_server)
     ensure_proxy_running()
 
@@ -1213,6 +1216,7 @@ def cmd_restart(args):
         port_map[srv_cfg["name"]] = deterministic_port(proj, name, srv_cfg["name"])
 
     secrets = load_secrets(repo_root)
+    primary_server = next((sc["name"] for sc in config["servers"] if sc.get("primary")), None)
 
     server_records = []
     setup_failed = False
@@ -1225,16 +1229,19 @@ def cmd_restart(args):
         proc_env = os.environ.copy()
         proc_env.update(secrets)
         for key, val in srv_cfg.get("env", {}).items():
-            proc_env[key] = substitute_vars(val, port_map, srv_name, proj, name)
+            proc_env[key] = substitute_vars(val, port_map, srv_name, proj, name,
+                                            primary_server=primary_server)
 
-        cmd = substitute_vars(srv_cfg["start_command"], port_map, srv_name, proj, name)
+        cmd = substitute_vars(srv_cfg["start_command"], port_map, srv_name, proj, name,
+                              primary_server=primary_server)
 
         log_file = session_logs_dir(repo_root, name) / f"{srv_name}.log"
         log_handle = open(log_file, "w", encoding="utf-8")
 
         # Run the setup step (e.g. `dart pub get`) before starting the server.
         setup_cmd = substitute_vars(srv_cfg.get("setup_command", ""),
-                                    port_map, srv_name, proj, name)
+                                    port_map, srv_name, proj, name,
+                                    primary_server=primary_server)
         if not run_setup_command(setup_cmd, cwd, proc_env, log_handle, srv_name):
             log_handle.close()
             setup_failed = True
@@ -1275,7 +1282,6 @@ def cmd_restart(args):
     s["status"] = "running"
     s["started_at"] = datetime.now(timezone.utc).isoformat()
     save_sessions(repo_root, sessions)
-    primary_server = next((s["name"] for s in config["servers"] if s.get("primary")), None)
     register_proxy_routes(proj, name, port_map, primary_server=primary_server)
     ensure_proxy_running()
 
