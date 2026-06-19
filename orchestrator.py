@@ -930,7 +930,8 @@ def cmd_spawn(args):
             stdin=subprocess.DEVNULL,
             stdout=log_handle,
             stderr=subprocess.STDOUT,
-            **({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if IS_WINDOWS else {})
+            **({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if IS_WINDOWS
+               else {"start_new_session": True})
         )
 
         server_records.append({
@@ -1256,7 +1257,8 @@ def cmd_restart(args):
             stdin=subprocess.DEVNULL,
             stdout=log_handle,
             stderr=subprocess.STDOUT,
-            **({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if IS_WINDOWS else {})
+            **({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if IS_WINDOWS
+               else {"start_new_session": True})
         )
 
         server_records.append({
