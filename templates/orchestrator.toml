@@ -27,12 +27,8 @@ branch_prefix = "feature/issue-"
 # DEV_MODE = "true"
 
 # Example: frontend
-# Use --release: the debug `flutter run` DWDS injected client crashes
-# ("_JsonMap is not a subtype of List") when a stale browser tab on the stable
-# proxy URL reconnects to a restarted dev server. Release ships no injected
-# client. Trade-off: no hot reload, slower rebuilds, a caching service worker.
 # [servers.frontend]
-# start_command = "flutter run --release -d web-server --web-port={frontend.port} --dart-define=API_BASE_URL=http://localhost:{backend.port}"
+# start_command = "flutter run -d web-server --web-port={frontend.port} --dart-define=API_BASE_URL=http://localhost:{backend.port}"
 
 # Example: simple web server
 # [servers.web]

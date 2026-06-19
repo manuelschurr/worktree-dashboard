@@ -168,6 +168,7 @@ def load_config(repo_root: Path) -> dict:
         servers.append({
             "name": name,
             "start_command": cmd,
+            "setup_command": cfg.get("setup_command", ""),
             "directory": cfg.get("directory", ""),
             "env": {k: v for k, v in cfg.get("env", {}).items() if isinstance(v, str)},
         })
@@ -464,6 +465,40 @@ def substitute_vars(text: str, port_map: dict, current_server: str = "",
     return text
 
 
+def run_setup_command(setup_cmd: str, cwd: Path, env: dict,
+                      log_handle, srv_name: str) -> bool:
+    """Run a server's setup_command before its start_command.
+
+    Runs synchronously in the server's working directory and environment.
+    Output is captured into the already-open server log handle, framed by
+    `=== setup ===` markers. Returns True on success (exit 0, or no setup
+    command configured), False if the command exited non-zero.
+    """
+    if not setup_cmd:
+        return True
+    print(f"  Running setup for {srv_name}: {setup_cmd}")
+    log_handle.write(f"=== setup: {setup_cmd} ===\n")
+    log_handle.flush()
+    result = subprocess.run(
+        setup_cmd,
+        shell=True,
+        cwd=str(cwd),
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=log_handle,
+        stderr=subprocess.STDOUT,
+    )
+    log_handle.write(f"=== setup exited {result.returncode} ===\n")
+    log_handle.flush()
+    if result.returncode != 0:
+        log_path = getattr(log_handle, "name", "the server log")
+        print(f"  ERROR: setup for {srv_name} failed (exit {result.returncode}). "
+              f"Server not started.", file=sys.stderr)
+        print(f"  See {log_path}", file=sys.stderr)
+        return False
+    return True
+
+
 def open_terminal_with_claude(worktree_path: Path, session_name: str):
     """Open a new terminal window running claude in the worktree directory."""
     wt_str = str(worktree_path)
@@ -645,12 +680,14 @@ def cmd_init(args):
     # -d web-server instead of -d chrome.
     #
     # Optional fields:
-    #   directory = "server"   # subdirectory to run from (default: repo root)
+    #   directory = "server"          # subdirectory to run from (default: repo root)
+    #   setup_command = "npm install" # runs before start_command on every spawn/restart
     #
     # Use [servers.<name>.env] to set/override env vars with port substitution.
 
     # -- Example: Dart Shelf backend --
     # [servers.backend]
+    # setup_command = "dart pub get"
     # start_command = "dart run bin/server.dart"
     # directory = "server"
     #
@@ -662,6 +699,7 @@ def cmd_init(args):
 
     # -- Example: Flutter frontend that needs the backend port --
     # [servers.frontend]
+    # setup_command = "flutter pub get"
     # start_command = "flutter run -d web-server --web-port={{frontend.port}} --dart-define=API_BASE_URL={{backend.url}} --dart-define=DEV_MODE=true"
 
     # -- Example: simple static site --
@@ -721,21 +759,47 @@ def cmd_spawn(args):
     if fetch.returncode != 0:
         print(f"Warning: could not fetch from {config['remote']}. Using local state.")
 
-    # Create branch if needed
+    # Resolve base_ref once (prefer remote, fall back to local)
+    base_ref = f"{config['remote']}/{config['base_branch']}"
+    verify_base = subprocess.run(
+        ["git", "rev-parse", "--verify", base_ref],
+        capture_output=True, text=True, cwd=repo_root
+    )
+    base_ref_available = verify_base.returncode == 0
+    if not base_ref_available:
+        base_ref = config["base_branch"]
+
+    # Create branch if needed, or fast-forward an existing branch to base_ref
+    # so the new worktree starts on current main rather than a stale commit
+    # left over from a previous session on this slot.
     check = subprocess.run(
         ["git", "rev-parse", "--verify", branch],
         capture_output=True, text=True, cwd=repo_root
     )
     if check.returncode != 0:
-        base_ref = f"{config['remote']}/{config['base_branch']}"
-        verify = subprocess.run(
-            ["git", "rev-parse", "--verify", base_ref],
-            capture_output=True, text=True, cwd=repo_root
-        )
-        if verify.returncode != 0:
-            base_ref = config["base_branch"]
         print(f"Creating branch {branch} from {base_ref}...")
         subprocess.run(["git", "branch", branch, base_ref], cwd=repo_root, check=True)
+    elif base_ref_available:
+        # Only fast-forward when the existing branch is strictly an ancestor
+        # of base_ref — never discard local commits. Skip silently if the
+        # branch is already at base_ref (is-ancestor returns 0 for equal refs).
+        is_ancestor = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", branch, base_ref],
+            cwd=repo_root, capture_output=True,
+        )
+        if is_ancestor.returncode == 0:
+            ff = subprocess.run(
+                ["git", "branch", "-f", branch, base_ref],
+                cwd=repo_root, capture_output=True, text=True,
+            )
+            if ff.returncode == 0:
+                print(f"Fast-forwarded {branch} to {base_ref}.")
+            else:
+                # Branch is likely checked out in another worktree.
+                print(f"Warning: could not fast-forward {branch} to {base_ref}: "
+                      f"{ff.stderr.strip() or 'unknown error'}")
+        else:
+            print(f"Branch {branch} has commits not on {base_ref}; leaving as-is.")
 
     # Create worktree
     wt_base.mkdir(parents=True, exist_ok=True)
@@ -768,6 +832,7 @@ def cmd_spawn(args):
 
     # Phase 3: Start each server
     server_records = []
+    setup_failed = False
     for srv_cfg in config["servers"]:
         srv_name = srv_cfg["name"]
         port = port_map[srv_name]
@@ -785,9 +850,24 @@ def cmd_spawn(args):
         cmd = substitute_vars(srv_cfg["start_command"], port_map, srv_name, proj, name)
 
         log_file = session_logs_dir(repo_root, name) / f"{srv_name}.log"
+        log_handle = open(log_file, "w", encoding="utf-8")
+
+        # Run the setup step (e.g. `dart pub get`) before starting the server.
+        setup_cmd = substitute_vars(srv_cfg.get("setup_command", ""),
+                                    port_map, srv_name, proj, name)
+        if not run_setup_command(setup_cmd, cwd, proc_env, log_handle, srv_name):
+            log_handle.close()
+            setup_failed = True
+            server_records.append({
+                "name": srv_name,
+                "port": port,
+                "pid": None,
+                "command": cmd,
+                "directory": srv_cfg.get("directory", ""),
+            })
+            continue
 
         print(f"Starting {srv_name} on port {port}: {cmd}")
-        log_handle = open(log_file, "w", encoding="utf-8")
 
         proc = subprocess.Popen(
             cmd,
@@ -834,7 +914,10 @@ def cmd_spawn(args):
     print(f"  Worktree:  {wt_path}")
     for srv in server_records:
         hostname = f"{name}-{srv['name']}.{proj}.{DEFAULT_TLD}"
-        print(f"  {srv['name']:12s} http://{hostname}:{DEFAULT_PROXY_PORT}  (PID {srv['pid']})")
+        if srv["pid"] is None:
+            print(f"  {srv['name']:12s} setup failed - see logs ({srv['name']}.log)")
+        else:
+            print(f"  {srv['name']:12s} http://{hostname}:{DEFAULT_PROXY_PORT}  (PID {srv['pid']})")
     print(f"  {'shortcut':12s} http://{name}.{proj}.{DEFAULT_TLD}:{DEFAULT_PROXY_PORT}")
     print()
     # Open a new terminal with claude in the worktree
@@ -842,6 +925,12 @@ def cmd_spawn(args):
         open_terminal_with_claude(wt_path, name)
     else:
         print(f"Open {wt_path} in your editor to start working.")
+
+    if setup_failed:
+        print()
+        print("Warning: one or more servers failed their setup step and were "
+              "not started. Fix the cause and run 'restart'.", file=sys.stderr)
+        sys.exit(1)
 
 
 def cmd_status(args):
@@ -1005,6 +1094,7 @@ def cmd_restart(args):
     secrets = load_secrets(repo_root)
 
     server_records = []
+    setup_failed = False
     for srv_cfg in config["servers"]:
         srv_name = srv_cfg["name"]
         port = port_map[srv_name]
@@ -1019,9 +1109,24 @@ def cmd_restart(args):
         cmd = substitute_vars(srv_cfg["start_command"], port_map, srv_name, proj, name)
 
         log_file = session_logs_dir(repo_root, name) / f"{srv_name}.log"
+        log_handle = open(log_file, "w", encoding="utf-8")
+
+        # Run the setup step (e.g. `dart pub get`) before starting the server.
+        setup_cmd = substitute_vars(srv_cfg.get("setup_command", ""),
+                                    port_map, srv_name, proj, name)
+        if not run_setup_command(setup_cmd, cwd, proc_env, log_handle, srv_name):
+            log_handle.close()
+            setup_failed = True
+            server_records.append({
+                "name": srv_name,
+                "port": port,
+                "pid": None,
+                "command": cmd,
+                "directory": srv_cfg.get("directory", ""),
+            })
+            continue
 
         print(f"Starting {srv_name} on port {port}: {cmd}")
-        log_handle = open(log_file, "w", encoding="utf-8")
 
         proc = subprocess.Popen(
             cmd,
@@ -1057,8 +1162,17 @@ def cmd_restart(args):
     print(f"  Worktree:  {wt_path}")
     for srv in server_records:
         hostname = f"{name}-{srv['name']}.{proj}.{DEFAULT_TLD}"
-        print(f"  {srv['name']:12s} http://{hostname}:{DEFAULT_PROXY_PORT}  (PID {srv['pid']})")
+        if srv["pid"] is None:
+            print(f"  {srv['name']:12s} setup failed - see logs ({srv['name']}.log)")
+        else:
+            print(f"  {srv['name']:12s} http://{hostname}:{DEFAULT_PROXY_PORT}  (PID {srv['pid']})")
     print(f"  {'shortcut':12s} http://{name}.{proj}.{DEFAULT_TLD}:{DEFAULT_PROXY_PORT}")
+
+    if setup_failed:
+        print()
+        print("Warning: one or more servers failed their setup step and were "
+              "not started. Fix the cause and run 'restart' again.", file=sys.stderr)
+        sys.exit(1)
 
 
 def cmd_cleanup(args):
