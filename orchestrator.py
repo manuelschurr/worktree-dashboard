@@ -958,8 +958,42 @@ def cmd_spawn(args):
         sys.exit(1)
 
 
+def parse_free_mb(text):
+    mem = swap = None
+    for line in text.splitlines():
+        p = line.split()
+        if p and p[0] == "Mem:":
+            mem = p
+        elif p and p[0] == "Swap:":
+            swap = p
+    if not mem:
+        return None
+    return {
+        "total_mb": int(mem[1]), "used_mb": int(mem[2]),
+        "available_mb": int(mem[6]) if len(mem) > 6 else int(mem[3]),
+        "swap_total_mb": int(swap[1]) if swap else 0,
+        "swap_used_mb": int(swap[2]) if swap else 0,
+    }
+
 def read_system_memory():
-    return None
+    if IS_WINDOWS:
+        return None
+    try:
+        r = subprocess.run(["free", "-m"], capture_output=True, text=True, timeout=5)
+        return parse_free_mb(r.stdout) if r.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+def process_rss_mb(pid):
+    if pid is None or IS_WINDOWS:
+        return None
+    try:
+        r = subprocess.run(["ps", "-o", "rss=", "-p", str(int(pid))],
+                           capture_output=True, text=True, timeout=5)
+        out = r.stdout.strip()
+        return round(int(out) / 1024) if out else None
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return None
 
 
 def build_status(repo_root):
@@ -977,6 +1011,7 @@ def build_status(repo_root):
                 "up": is_process_alive(srv.get("pid")),
                 "primary": is_primary,
                 "url": proxy_url(name, srv["name"], proj, primary=is_primary),
+                "rss_mb": process_rss_mb(srv.get("pid")),
             })
         out["sessions"][name] = {
             "branch": s.get("branch"), "status": s.get("status"),

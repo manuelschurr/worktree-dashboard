@@ -48,6 +48,15 @@ def test_routes_no_primary_unchanged(tmp_path, monkeypatch):
     assert routes["b3-frontend.scout.localhost"] == 10241
     assert routes["b3.scout.localhost"] == 50022  # shortcut → first server (backend)
 
+FREE = ("              total        used        free      shared  buff/cache   available\n"
+        "Mem:           7936        3280        3566           4        1399        4655\n"
+        "Swap:             0           0           0\n")
+
+def test_parse_free_mb():
+    m = orchestrator.parse_free_mb(FREE)
+    assert m == {"total_mb":7936,"used_mb":3280,"available_mb":4655,
+                 "swap_total_mb":0,"swap_used_mb":0}
+
 def test_build_status_shape(tmp_path, monkeypatch):
     monkeypatch.setattr(orchestrator, "find_repo_root", lambda: tmp_path)
     (tmp_path / ".orchestrator").mkdir()
