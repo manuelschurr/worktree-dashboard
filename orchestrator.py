@@ -969,7 +969,6 @@ def build_status(repo_root):
     sessions = load_sessions(repo_root)
     out = {"memory": read_system_memory(), "sessions": {}}
     for name, s in sessions.items():
-        branch = s.get("branch", name)
         servers = []
         for srv in s.get("servers", []):
             is_primary = (srv["name"] == primary_server)

@@ -60,4 +60,4 @@ def test_build_status_shape(tmp_path, monkeypatch):
     data = orchestrator.build_status(tmp_path)
     s = data["sessions"]["3"]["servers"][0]
     assert s["url"] == f"http://3.{tmp_path.name}.localhost:1337"
-    assert s["up"] is False and "memory" in data
+    assert s["up"] is False and data["memory"] is None
