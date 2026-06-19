@@ -977,7 +977,7 @@ def build_status(repo_root):
                 "name": srv["name"], "port": srv.get("port"), "pid": srv.get("pid"),
                 "up": is_process_alive(srv.get("pid")),
                 "primary": is_primary,
-                "url": proxy_url(branch, srv["name"], proj, primary=is_primary),
+                "url": proxy_url(name, srv["name"], proj, primary=is_primary),
             })
         out["sessions"][name] = {
             "branch": s.get("branch"), "status": s.get("status"),
