@@ -187,6 +187,7 @@ def load_config(repo_root: Path) -> dict:
             "start_command": cmd,
             "setup_command": cfg.get("setup_command", ""),
             "directory": cfg.get("directory", ""),
+            "primary": bool(cfg.get("primary", False)),
             "env": {k: v for k, v in cfg.get("env", {}).items() if isinstance(v, str)},
         })
 
@@ -325,16 +326,23 @@ def save_proxy_routes(routes: dict):
     PROXY_ROUTES_FILE.write_text(json.dumps(routes, indent=2), encoding="utf-8")
 
 
-def register_proxy_routes(project: str, session: str, port_map: dict,
-                          tld: str = DEFAULT_TLD):
-    """Register hostname->port mappings for a session's servers."""
+def register_proxy_routes(project, session, port_map, tld=None, primary_server=None):
+    """Register hostname->port mappings for a session's servers.
+
+    If primary_server is set, the bare `{session}.{project}.{tld}` host points to
+    it and that server gets NO `{session}-{server}` host. Otherwise every server
+    gets a `{session}-{server}` host and the bare host points to the first server.
+    """
     routes = load_proxy_routes()
     servers = list(port_map.keys())
     for srv_name, port in port_map.items():
-        routes[f"{session}-{srv_name}.{project}.{tld}"] = port
-    # Shortcut: session.project.tld -> first server
-    if servers:
-        routes[f"{session}.{project}.{tld}"] = port_map[servers[0]]
+        if srv_name == primary_server:
+            continue  # primary uses the bare host only
+        routes[host_for(session, srv_name, project)] = port
+    if primary_server and primary_server in port_map:
+        routes[host_for(session, primary_server, project, primary=True)] = port_map[primary_server]
+    elif servers:
+        routes[host_for(session, servers[0], project, primary=True)] = port_map[servers[0]]
     save_proxy_routes(routes)
 
 
@@ -922,7 +930,8 @@ def cmd_spawn(args):
         "started_at": now_iso,
     }
     save_sessions(repo_root, sessions)
-    register_proxy_routes(proj, name, port_map)
+    primary_server = next((s["name"] for s in config["servers"] if s.get("primary")), None)
+    register_proxy_routes(proj, name, port_map, primary_server=primary_server)
     ensure_proxy_running()
 
     print()
@@ -930,12 +939,11 @@ def cmd_spawn(args):
     print(f"  Branch:    {branch}")
     print(f"  Worktree:  {wt_path}")
     for srv in server_records:
-        hostname = f"{name}-{srv['name']}.{proj}.{DEFAULT_TLD}"
+        is_primary = (srv["name"] == primary_server)
         if srv["pid"] is None:
             print(f"  {srv['name']:12s} setup failed - see logs ({srv['name']}.log)")
         else:
-            print(f"  {srv['name']:12s} http://{hostname}:{DEFAULT_PROXY_PORT}  (PID {srv['pid']})")
-    print(f"  {'shortcut':12s} http://{name}.{proj}.{DEFAULT_TLD}:{DEFAULT_PROXY_PORT}")
+            print(f"  {srv['name']:12s} {proxy_url(name, srv['name'], proj, primary=is_primary)}  (PID {srv['pid']})")
     print()
     # Open a new terminal with claude in the worktree
     if not args.no_claude:
@@ -1170,7 +1178,8 @@ def cmd_restart(args):
     s["status"] = "running"
     s["started_at"] = datetime.now(timezone.utc).isoformat()
     save_sessions(repo_root, sessions)
-    register_proxy_routes(proj, name, port_map)
+    primary_server = next((s["name"] for s in config["servers"] if s.get("primary")), None)
+    register_proxy_routes(proj, name, port_map, primary_server=primary_server)
     ensure_proxy_running()
 
     print()
@@ -1178,12 +1187,11 @@ def cmd_restart(args):
     print(f"  Branch:    {s['branch']}")
     print(f"  Worktree:  {wt_path}")
     for srv in server_records:
-        hostname = f"{name}-{srv['name']}.{proj}.{DEFAULT_TLD}"
+        is_primary = (srv["name"] == primary_server)
         if srv["pid"] is None:
             print(f"  {srv['name']:12s} setup failed - see logs ({srv['name']}.log)")
         else:
-            print(f"  {srv['name']:12s} http://{hostname}:{DEFAULT_PROXY_PORT}  (PID {srv['pid']})")
-    print(f"  {'shortcut':12s} http://{name}.{proj}.{DEFAULT_TLD}:{DEFAULT_PROXY_PORT}")
+            print(f"  {srv['name']:12s} {proxy_url(name, srv['name'], proj, primary=is_primary)}  (PID {srv['pid']})")
 
     if setup_failed:
         print()
