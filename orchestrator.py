@@ -128,6 +128,23 @@ PROXY_ROUTES_FILE = PROXY_DIR / "routes.json"
 DEFAULT_PROXY_PORT = 1337
 DEFAULT_TLD = "localhost"
 
+def _tld():    return os.environ.get("ORCH_TLD", "localhost")
+def _scheme(): return os.environ.get("ORCH_SCHEME", "http")
+def _proxy_port(): return int(os.environ.get("ORCH_PROXY_PORT", str(DEFAULT_PROXY_PORT)))
+
+def _url_port_suffix():
+    v = os.environ.get("ORCH_URL_PORT")
+    if v is None:
+        return f":{_proxy_port()}"
+    return "" if v == "" else f":{v}"
+
+def host_for(session, server, project, *, primary=False):
+    tld = _tld()
+    return f"{session}.{project}.{tld}" if primary else f"{session}-{server}.{project}.{tld}"
+
+def proxy_url(session, server, project, *, primary=False):
+    return f"{_scheme()}://{host_for(session, server, project, primary=primary)}{_url_port_suffix()}"
+
 
 # ---------------------------------------------------------------------------
 # Helpers
