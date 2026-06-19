@@ -125,6 +125,7 @@ LOGS_DIR = "logs"
 
 PROXY_DIR = Path.home() / ".orchestrator"
 PROXY_ROUTES_FILE = PROXY_DIR / "routes.json"
+ACCESS_FILE = PROXY_DIR / "access.json"
 DEFAULT_PROXY_PORT = 1337
 DEFAULT_TLD = "localhost"
 
@@ -144,6 +145,33 @@ def host_for(session, server, project, *, primary=False):
 
 def proxy_url(session, server, project, *, primary=False):
     return f"{_scheme()}://{host_for(session, server, project, primary=primary)}{_url_port_suffix()}"
+
+
+def should_record_access(prev_iso, now_dt, min_seconds=30):
+    if not prev_iso:
+        return True
+    try:
+        prev = datetime.fromisoformat(prev_iso)
+    except ValueError:
+        return True
+    return (now_dt - prev).total_seconds() >= min_seconds
+
+
+def _load_access():
+    if not ACCESS_FILE.exists():
+        return {}
+    try:
+        return json.loads(ACCESS_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def record_access(host, now_dt):
+    data = _load_access()
+    if should_record_access(data.get(host), now_dt):
+        data[host] = now_dt.isoformat()
+        PROXY_DIR.mkdir(parents=True, exist_ok=True)
+        ACCESS_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -1001,6 +1029,7 @@ def build_status(repo_root):
     config = load_config(repo_root)
     primary_server = next((s["name"] for s in config["servers"] if s.get("primary")), None)
     sessions = load_sessions(repo_root)
+    access = _load_access()
     out = {"memory": read_system_memory(), "sessions": {}}
     for name, s in sessions.items():
         servers = []
@@ -1012,6 +1041,7 @@ def build_status(repo_root):
                 "primary": is_primary,
                 "url": proxy_url(name, srv["name"], proj, primary=is_primary),
                 "rss_mb": process_rss_mb(srv.get("pid")),
+                "last_access": access.get(host_for(name, srv["name"], proj, primary=is_primary)),
             })
         out["sessions"][name] = {
             "branch": s.get("branch"), "status": s.get("status"),
@@ -1363,6 +1393,7 @@ async def _proxy_connection(reader, writer, routes):
             writer.close()
             return
 
+        record_access(host, datetime.now(timezone.utc))
         target_port = routes[host]
 
         # Connect to upstream server (localhost resolves to IPv4 or IPv6)

@@ -70,3 +70,13 @@ def test_build_status_shape(tmp_path, monkeypatch):
     s = data["sessions"]["3"]["servers"][0]
     assert s["url"] == f"http://3.{tmp_path.name}.localhost:1337"
     assert s["up"] is False and data["memory"] is None
+
+from datetime import datetime, timezone, timedelta
+
+def test_should_record_access():
+    now = datetime(2026,6,18,12,0,30,tzinfo=timezone.utc)
+    assert orchestrator.should_record_access(None, now) is True
+    recent = (now - timedelta(seconds=10)).isoformat()
+    assert orchestrator.should_record_access(recent, now) is False
+    old = (now - timedelta(seconds=40)).isoformat()
+    assert orchestrator.should_record_access(old, now) is True
