@@ -47,3 +47,17 @@ def test_routes_no_primary_unchanged(tmp_path, monkeypatch):
     assert routes["b3-backend.scout.localhost"] == 50022
     assert routes["b3-frontend.scout.localhost"] == 10241
     assert routes["b3.scout.localhost"] == 50022  # shortcut → first server (backend)
+
+def test_build_status_shape(tmp_path, monkeypatch):
+    monkeypatch.setattr(orchestrator, "find_repo_root", lambda: tmp_path)
+    (tmp_path / ".orchestrator").mkdir()
+    (tmp_path / ".orchestrator" / "sessions.json").write_text(
+        '{"3":{"branch":"b3","status":"running","worktree":"/x",'
+        '"servers":[{"name":"frontend","port":10241,"pid":1}],"ports":{"frontend":10241}}}')
+    (tmp_path / ".orchestrator.toml").write_text(
+        "[servers.frontend]\nstart_command=\"x\"\nprimary=true\n")
+    monkeypatch.setattr(orchestrator, "is_process_alive", lambda pid: False)
+    data = orchestrator.build_status(tmp_path)
+    s = data["sessions"]["3"]["servers"][0]
+    assert s["url"] == "http://b3.scout.localhost:1337" or s["url"].endswith("b3." + tmp_path.name + ".localhost:1337")
+    assert s["up"] is False and "memory" in data

@@ -958,8 +958,39 @@ def cmd_spawn(args):
         sys.exit(1)
 
 
+def read_system_memory():
+    return None
+
+
+def build_status(repo_root):
+    proj = project_name(repo_root)
+    config = load_config(repo_root)
+    primary_server = next((s["name"] for s in config["servers"] if s.get("primary")), None)
+    sessions = load_sessions(repo_root)
+    out = {"memory": read_system_memory(), "sessions": {}}
+    for name, s in sessions.items():
+        branch = s.get("branch", name)
+        servers = []
+        for srv in s.get("servers", []):
+            is_primary = (srv["name"] == primary_server)
+            servers.append({
+                "name": srv["name"], "port": srv.get("port"), "pid": srv.get("pid"),
+                "up": is_process_alive(srv.get("pid")),
+                "primary": is_primary,
+                "url": proxy_url(branch, srv["name"], proj, primary=is_primary),
+            })
+        out["sessions"][name] = {
+            "branch": s.get("branch"), "status": s.get("status"),
+            "worktree": s.get("worktree"), "servers": servers,
+        }
+    return out
+
+
 def cmd_status(args):
     repo_root = find_repo_root()
+    if getattr(args, "json", False):
+        print(json.dumps(build_status(repo_root), indent=2))
+        return
     sessions = load_sessions(repo_root)
 
     if not sessions:
@@ -1420,7 +1451,8 @@ def main():
     p_spawn.add_argument("--no-claude", action="store_true",
                          help="Don't open a new terminal with claude")
 
-    sub.add_parser("status", help="Show all sessions and server health")
+    p_status = sub.add_parser("status", help="Show all sessions and server health")
+    p_status.add_argument("--json", action="store_true", help="Output status as JSON")
 
     p_logs = sub.add_parser("logs", help="Show server logs")
     p_logs.add_argument("name", help="Session name")
