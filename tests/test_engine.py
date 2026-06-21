@@ -109,3 +109,83 @@ def test_unregister_honors_env_tld(tmp_path, monkeypatch):
     assert "3.scout.rookpine.com" in orchestrator.load_proxy_routes()
     orchestrator.unregister_proxy_routes("scout", "3")
     assert orchestrator.load_proxy_routes() == {}
+
+# ─── kill: reap the whole process group, not just the wrapper PID ──────────
+import subprocess
+import signal as _signal
+import time as _time
+
+@pytest.mark.skipif(orchestrator.IS_WINDOWS, reason="POSIX process-group semantics")
+def test_kill_process_reaps_detached_child_group():
+    # `sh -c 'sleep 30 & echo $!; wait'` forks a child `sleep` (PID echoed) and
+    # waits — the wrapper+server shape that start_new_session=True produces.
+    # Killing only the recorded wrapper PID orphans the child; kill_process must
+    # reap the whole group so the detached child dies too. The child reparents to
+    # init (not our child), so is_process_alive is reliable once it's gone.
+    p = subprocess.Popen(["sh", "-c", "sleep 30 & echo $!; wait"],
+                         stdout=subprocess.PIPE, text=True, start_new_session=True)
+    try:
+        child_pid = int(p.stdout.readline().strip())
+        assert orchestrator.is_process_alive(child_pid)
+        orchestrator.kill_process(p.pid)
+        deadline = _time.time() + 6
+        while orchestrator.is_process_alive(child_pid) and _time.time() < deadline:
+            _time.sleep(0.1)
+        assert not orchestrator.is_process_alive(child_pid), \
+            "detached child survived — kill_process did not reap the group"
+    finally:
+        try:
+            os.killpg(os.getpgid(p.pid), _signal.SIGKILL)
+        except (OSError, ProcessLookupError):
+            pass
+        try:
+            p.wait(timeout=5)
+        except Exception:
+            pass
+
+@pytest.mark.skipif(orchestrator.IS_WINDOWS, reason="POSIX-only safety guard")
+def test_kill_process_non_group_leader_kills_only_pid():
+    # A PID that is NOT its own group leader shares a group (e.g. with the
+    # orchestrator). kill_process must signal only that PID — never killpg the
+    # shared group, which would kill siblings/the parent (this very test process
+    # shares the group, so a killpg bug would terminate the test runner).
+    p = subprocess.Popen(["sleep", "30"])  # no start_new_session -> shares our group
+    try:
+        assert os.getpgid(p.pid) != p.pid  # not a group leader
+        orchestrator.kill_process(p.pid)
+        deadline = _time.time() + 6
+        while p.poll() is None and _time.time() < deadline:
+            _time.sleep(0.1)
+        assert p.returncode is not None and p.returncode < 0  # killed by a signal
+    finally:
+        try:
+            p.kill(); p.wait(timeout=5)
+        except Exception:
+            pass
+
+# ─── post-kill verification: parse listeners + detect stragglers ───────────
+SS_OUT = (
+    'LISTEN 0      128          0.0.0.0:50022      0.0.0.0:*    users:(("dart:server.dar",pid=9302,fd=10))\n'
+    'LISTEN 0      4096               *:443              *:*    users:(("caddy",pid=205006,fd=7))\n'
+    'LISTEN 0      128          127.0.0.1:1337     0.0.0.0:*    users:(("python3",pid=9304,fd=6))\n'
+    'LISTEN 0      4096            [::]:22            [::]:*    users:(("sshd",pid=1256,fd=4),("systemd",pid=1,fd=239))\n'
+)
+
+def test_parse_ss_listeners():
+    m = orchestrator.parse_ss_listeners(SS_OUT)
+    assert m[50022] == {9302}
+    assert m[443] == {205006}
+    assert m[1337] == {9304}
+    assert m[22] == {1256, 1}  # multiple holders collected
+
+def test_verify_servers_stopped_flags_straggler(monkeypatch):
+    monkeypatch.setattr(orchestrator, "listening_ports_with_pids",
+                        lambda: {50022: {9302}})
+    servers = [{"name": "backend", "port": 50022}, {"name": "frontend", "port": 33737}]
+    stragglers = orchestrator.verify_servers_stopped(servers)
+    assert stragglers == [("backend", 50022, {9302})]
+
+def test_verify_servers_stopped_all_clear(monkeypatch):
+    monkeypatch.setattr(orchestrator, "listening_ports_with_pids", lambda: {})
+    servers = [{"name": "backend", "port": 50022}]
+    assert orchestrator.verify_servers_stopped(servers) == []
