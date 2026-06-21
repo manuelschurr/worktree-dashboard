@@ -66,6 +66,9 @@ def test_build_status_shape(tmp_path, monkeypatch):
     (tmp_path / ".orchestrator.toml").write_text(
         "[servers.frontend]\nstart_command=\"x\"\nprimary=true\n")
     monkeypatch.setattr(orchestrator, "is_process_alive", lambda pid: False)
+    # Force memory to None so the shape assertion is host-independent (this box
+    # has a working `free`, so read_system_memory() would otherwise return real data).
+    monkeypatch.setattr(orchestrator, "read_system_memory", lambda: None)
     data = orchestrator.build_status(tmp_path)
     s = data["sessions"]["3"]["servers"][0]
     assert s["url"] == f"http://3.{tmp_path.name}.localhost:1337"
