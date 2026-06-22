@@ -189,3 +189,21 @@ def test_verify_servers_stopped_all_clear(monkeypatch):
     monkeypatch.setattr(orchestrator, "listening_ports_with_pids", lambda: {})
     servers = [{"name": "backend", "port": 50022}]
     assert orchestrator.verify_servers_stopped(servers) == []
+
+# ─── rss: count the whole subtree, not just the shell wrapper PID ──────────
+PS_TREE = (
+    "  214116       1    1940\n"   # backend wrapper (sh)
+    "  214117  214116  246744\n"   # its real dart server (the memory lives here)
+    "  214118       1    1900\n"   # unrelated frontend wrapper
+    "  214119  214118  101000\n"   # its flutter child
+    "      1       0    5000\n"
+)
+
+def test_sum_descendant_rss_mb_counts_real_child():
+    # the recorded wrapper PID (214116) reports ~2MB on its own; the real RSS is
+    # the dart child — summing the subtree gives the true footprint.
+    assert orchestrator.sum_descendant_rss_mb(214116, PS_TREE) == round((1940 + 246744) / 1024)
+
+def test_sum_descendant_rss_mb_leaf_and_unknown():
+    assert orchestrator.sum_descendant_rss_mb(214117, PS_TREE) == round(246744 / 1024)
+    assert orchestrator.sum_descendant_rss_mb(999999, PS_TREE) is None
