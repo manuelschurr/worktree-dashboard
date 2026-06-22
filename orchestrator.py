@@ -798,6 +798,15 @@ def validate_no_secrets_in_config(repo_root: Path):
         print("=" * 60, file=sys.stderr)
 
 
+def panes_to_create(worktree_paths, existing_pane_paths):
+    """Worktree paths that have no tmux pane yet (additive reconcile).
+
+    Compared by normalized path so trailing slashes / '.' segments don't cause a
+    duplicate pane. Input order is preserved."""
+    existing = {os.path.normpath(p) for p in existing_pane_paths}
+    return [p for p in worktree_paths if os.path.normpath(p) not in existing]
+
+
 # ---------------------------------------------------------------------------
 # Commands
 # ---------------------------------------------------------------------------

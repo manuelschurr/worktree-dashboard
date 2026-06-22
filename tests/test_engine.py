@@ -207,3 +207,19 @@ def test_sum_descendant_rss_mb_counts_real_child():
 def test_sum_descendant_rss_mb_leaf_and_unknown():
     assert orchestrator.sum_descendant_rss_mb(214117, PS_TREE) == round(246744 / 1024)
     assert orchestrator.sum_descendant_rss_mb(999999, PS_TREE) is None
+
+# ─── session grid: additive pane reconcile ────────────────────────────────
+def test_panes_to_create_additive_and_normalized():
+    worktrees = ["/root/code/worktrees/scout/1",
+                 "/root/code/worktrees/scout/2",
+                 "/root/code/worktrees/scout/3"]
+    existing = ["/root/code/worktrees/scout/1/", "/root/code/worktrees/scout/2/./"]
+    assert orchestrator.panes_to_create(worktrees, existing) == ["/root/code/worktrees/scout/3"]
+
+def test_panes_to_create_all_present():
+    w = ["/a/b", "/a/c"]
+    assert orchestrator.panes_to_create(w, ["/a/b", "/a/c"]) == []
+
+def test_panes_to_create_empty_existing():
+    w = ["/a/b", "/a/c"]
+    assert orchestrator.panes_to_create(w, []) == w
