@@ -13,40 +13,40 @@ def clean_env(monkeypatch):
         monkeypatch.delenv(k, raising=False)
 
 def test_host_default_localhost():
-    assert orchestrator.host_for("b3", "frontend", "scout") == "b3-frontend.scout.localhost"
+    assert orchestrator.host_for("b3", "frontend", "demo") == "b3-frontend.demo.localhost"
 
 def test_host_primary_collapses():
-    assert orchestrator.host_for("b3", "frontend", "scout", primary=True) == "b3.scout.localhost"
+    assert orchestrator.host_for("b3", "frontend", "demo", primary=True) == "b3.demo.localhost"
 
 def test_url_default_has_proxy_port():
-    assert orchestrator.proxy_url("b3", "backend", "scout") == "http://b3-backend.scout.localhost:1337"
+    assert orchestrator.proxy_url("b3", "backend", "demo") == "http://b3-backend.demo.localhost:1337"
 
 def test_url_public_no_port(monkeypatch):
-    monkeypatch.setenv("ORCH_TLD", "rookpine.com")
+    monkeypatch.setenv("ORCH_TLD", "example.com")
     monkeypatch.setenv("ORCH_SCHEME", "https")
     monkeypatch.setenv("ORCH_URL_PORT", "")
-    assert orchestrator.proxy_url("b3", "frontend", "scout", primary=True) == "https://b3.scout.rookpine.com"
+    assert orchestrator.proxy_url("b3", "frontend", "demo", primary=True) == "https://b3.demo.example.com"
 
 def test_routes_with_primary(tmp_path, monkeypatch):
     # primary frontend → bare host; backend → -backend host; no redundant -frontend
     monkeypatch.setattr(orchestrator, "PROXY_ROUTES_FILE", tmp_path / "routes.json")
     monkeypatch.setattr(orchestrator, "PROXY_DIR", tmp_path)
     orchestrator.register_proxy_routes(
-        "scout", "b3", {"frontend": 10241, "backend": 50022},
+        "demo", "b3", {"frontend": 10241, "backend": 50022},
         primary_server="frontend")
     routes = orchestrator.load_proxy_routes()
-    assert routes["b3.scout.localhost"] == 10241
-    assert routes["b3-backend.scout.localhost"] == 50022
-    assert "b3-frontend.scout.localhost" not in routes
+    assert routes["b3.demo.localhost"] == 10241
+    assert routes["b3-backend.demo.localhost"] == 50022
+    assert "b3-frontend.demo.localhost" not in routes
 
 def test_routes_no_primary_unchanged(tmp_path, monkeypatch):
     monkeypatch.setattr(orchestrator, "PROXY_ROUTES_FILE", tmp_path / "routes.json")
     monkeypatch.setattr(orchestrator, "PROXY_DIR", tmp_path)
-    orchestrator.register_proxy_routes("scout", "b3", {"backend": 50022, "frontend": 10241})
+    orchestrator.register_proxy_routes("demo", "b3", {"backend": 50022, "frontend": 10241})
     routes = orchestrator.load_proxy_routes()
-    assert routes["b3-backend.scout.localhost"] == 50022
-    assert routes["b3-frontend.scout.localhost"] == 10241
-    assert routes["b3.scout.localhost"] == 50022  # shortcut → first server (backend)
+    assert routes["b3-backend.demo.localhost"] == 50022
+    assert routes["b3-frontend.demo.localhost"] == 10241
+    assert routes["b3.demo.localhost"] == 50022  # shortcut → first server (backend)
 
 FREE = ("              total        used        free      shared  buff/cache   available\n"
         "Mem:           7936        3280        3566           4        1399        4655\n"
@@ -87,27 +87,27 @@ def test_should_record_access():
 def test_substitute_url_primary_vs_nonprimary():
     pm = {"frontend": 10241, "backend": 50022}
     out = orchestrator.substitute_vars("{frontend.url} {backend.url}", pm,
-                                       project="scout", session="3",
+                                       project="demo", session="3",
                                        primary_server="frontend")
-    assert out == "http://3.scout.localhost:1337 http://3-backend.scout.localhost:1337"
+    assert out == "http://3.demo.localhost:1337 http://3-backend.demo.localhost:1337"
 
 def test_substitute_url_honors_env(monkeypatch):
-    monkeypatch.setenv("ORCH_TLD", "rookpine.com")
+    monkeypatch.setenv("ORCH_TLD", "example.com")
     monkeypatch.setenv("ORCH_SCHEME", "https")
     monkeypatch.setenv("ORCH_URL_PORT", "")
     out = orchestrator.substitute_vars("{frontend.url}", {"frontend": 1},
-                                       project="scout", session="3",
+                                       project="demo", session="3",
                                        primary_server="frontend")
-    assert out == "https://3.scout.rookpine.com"
+    assert out == "https://3.demo.example.com"
 
 def test_unregister_honors_env_tld(tmp_path, monkeypatch):
     monkeypatch.setattr(orchestrator, "PROXY_ROUTES_FILE", tmp_path / "routes.json")
     monkeypatch.setattr(orchestrator, "PROXY_DIR", tmp_path)
-    monkeypatch.setenv("ORCH_TLD", "rookpine.com")
-    orchestrator.register_proxy_routes("scout", "3", {"frontend": 1, "backend": 2},
+    monkeypatch.setenv("ORCH_TLD", "example.com")
+    orchestrator.register_proxy_routes("demo", "3", {"frontend": 1, "backend": 2},
                                        primary_server="frontend")
-    assert "3.scout.rookpine.com" in orchestrator.load_proxy_routes()
-    orchestrator.unregister_proxy_routes("scout", "3")
+    assert "3.demo.example.com" in orchestrator.load_proxy_routes()
+    orchestrator.unregister_proxy_routes("demo", "3")
     assert orchestrator.load_proxy_routes() == {}
 
 # ─── kill: reap the whole process group, not just the wrapper PID ──────────
