@@ -110,6 +110,18 @@ def test_unregister_honors_env_tld(tmp_path, monkeypatch):
     orchestrator.unregister_proxy_routes("demo", "3")
     assert orchestrator.load_proxy_routes() == {}
 
+def test_unregister_main_removes_apex_routes(tmp_path, monkeypatch):
+    monkeypatch.setattr(orchestrator, "PROXY_ROUTES_FILE", tmp_path / "routes.json")
+    monkeypatch.setattr(orchestrator, "PROXY_DIR", tmp_path)
+    orchestrator.register_proxy_routes("demo", "main", {"frontend": 10, "backend": 20},
+                                       primary_server="frontend")
+    orchestrator.register_proxy_routes("demo", "1", {"frontend": 30}, primary_server="frontend")
+    orchestrator.unregister_proxy_routes("demo", "main")
+    r = orchestrator.load_proxy_routes()
+    assert "demo.localhost" not in r            # apex primary removed
+    assert "demo-backend.localhost" not in r    # apex non-primary removed
+    assert r.get("1.demo.localhost") == 30      # numbered session route untouched
+
 # ─── kill: reap the whole process group, not just the wrapper PID ──────────
 import subprocess
 import signal as _signal
