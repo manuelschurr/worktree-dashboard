@@ -223,3 +223,19 @@ def test_panes_to_create_all_present():
 def test_panes_to_create_empty_existing():
     w = ["/a/b", "/a/c"]
     assert orchestrator.panes_to_create(w, []) == w
+
+GIT_WT = (
+    "worktree /root/code/scout\nHEAD abc\nbranch refs/heads/main\n\n"
+    "worktree /root/code/worktrees/scout/1\nHEAD def\nbranch refs/heads/b1\n\n"
+    "worktree /root/code/worktrees/scout/3\nHEAD ghi\nbranch refs/heads/b3\n\n"
+)
+
+def test_worktree_paths_under_filters_to_base():
+    # the main repo (/root/code/scout) is NOT under the worktrees base, so it's excluded;
+    # the session worktrees under the base are kept, in order.
+    base = "/root/code/worktrees/scout"
+    assert orchestrator.worktree_paths_under(GIT_WT, base) == [
+        "/root/code/worktrees/scout/1", "/root/code/worktrees/scout/3"]
+
+def test_worktree_paths_under_none_match():
+    assert orchestrator.worktree_paths_under(GIT_WT, "/root/code/worktrees/other") == []
