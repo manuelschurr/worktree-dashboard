@@ -989,79 +989,83 @@ def cmd_spawn(args):
         print(f"Error: session '{name}' is already running. Kill it first.", file=sys.stderr)
         sys.exit(1)
 
-    branch = f"{config['branch_prefix']}{name}"
-    wt_base = worktree_base_dir(repo_root)
-    wt_path = wt_base / name
+    if name == MAIN_SESSION:
+        wt_path = repo_root
+        print(f"Serving '{name}' in place at {wt_path} (no worktree).")
+    else:
+        branch = f"{config['branch_prefix']}{name}"
+        wt_base = worktree_base_dir(repo_root)
+        wt_path = wt_base / name
 
-    # Fetch (non-fatal)
-    print(f"Fetching from {config['remote']}...")
-    fetch = subprocess.run(
-        ["git", "fetch", config["remote"]], cwd=repo_root, capture_output=True, text=True
-    )
-    if fetch.returncode != 0:
-        print(f"Warning: could not fetch from {config['remote']}. Using local state.")
-
-    # Resolve base_ref once (prefer remote, fall back to local)
-    base_ref = f"{config['remote']}/{config['base_branch']}"
-    verify_base = subprocess.run(
-        ["git", "rev-parse", "--verify", base_ref],
-        capture_output=True, text=True, cwd=repo_root
-    )
-    base_ref_available = verify_base.returncode == 0
-    if not base_ref_available:
-        base_ref = config["base_branch"]
-
-    # Create branch if needed, or fast-forward an existing branch to base_ref
-    # so the new worktree starts on current main rather than a stale commit
-    # left over from a previous session on this slot.
-    check = subprocess.run(
-        ["git", "rev-parse", "--verify", branch],
-        capture_output=True, text=True, cwd=repo_root
-    )
-    if check.returncode != 0:
-        print(f"Creating branch {branch} from {base_ref}...")
-        subprocess.run(["git", "branch", branch, base_ref], cwd=repo_root, check=True)
-    elif base_ref_available:
-        # Only fast-forward when the existing branch is strictly an ancestor
-        # of base_ref — never discard local commits. Skip silently if the
-        # branch is already at base_ref (is-ancestor returns 0 for equal refs).
-        is_ancestor = subprocess.run(
-            ["git", "merge-base", "--is-ancestor", branch, base_ref],
-            cwd=repo_root, capture_output=True,
+        # Fetch (non-fatal)
+        print(f"Fetching from {config['remote']}...")
+        fetch = subprocess.run(
+            ["git", "fetch", config["remote"]], cwd=repo_root, capture_output=True, text=True
         )
-        if is_ancestor.returncode == 0:
-            ff = subprocess.run(
-                ["git", "branch", "-f", branch, base_ref],
-                cwd=repo_root, capture_output=True, text=True,
-            )
-            if ff.returncode == 0:
-                print(f"Fast-forwarded {branch} to {base_ref}.")
-            else:
-                # Branch is likely checked out in another worktree.
-                print(f"Warning: could not fast-forward {branch} to {base_ref}: "
-                      f"{ff.stderr.strip() or 'unknown error'}")
-        else:
-            print(f"Branch {branch} has commits not on {base_ref}; leaving as-is.")
+        if fetch.returncode != 0:
+            print(f"Warning: could not fetch from {config['remote']}. Using local state.")
 
-    # Create worktree
-    wt_base.mkdir(parents=True, exist_ok=True)
-    if wt_path.exists():
-        if is_valid_worktree(repo_root, wt_path):
-            print(f"Worktree at {wt_path} is valid. Reusing.")
+        # Resolve base_ref once (prefer remote, fall back to local)
+        base_ref = f"{config['remote']}/{config['base_branch']}"
+        verify_base = subprocess.run(
+            ["git", "rev-parse", "--verify", base_ref],
+            capture_output=True, text=True, cwd=repo_root
+        )
+        base_ref_available = verify_base.returncode == 0
+        if not base_ref_available:
+            base_ref = config["base_branch"]
+
+        # Create branch if needed, or fast-forward an existing branch to base_ref
+        # so the new worktree starts on current main rather than a stale commit
+        # left over from a previous session on this slot.
+        check = subprocess.run(
+            ["git", "rev-parse", "--verify", branch],
+            capture_output=True, text=True, cwd=repo_root
+        )
+        if check.returncode != 0:
+            print(f"Creating branch {branch} from {base_ref}...")
+            subprocess.run(["git", "branch", branch, base_ref], cwd=repo_root, check=True)
+        elif base_ref_available:
+            # Only fast-forward when the existing branch is strictly an ancestor
+            # of base_ref — never discard local commits. Skip silently if the
+            # branch is already at base_ref (is-ancestor returns 0 for equal refs).
+            is_ancestor = subprocess.run(
+                ["git", "merge-base", "--is-ancestor", branch, base_ref],
+                cwd=repo_root, capture_output=True,
+            )
+            if is_ancestor.returncode == 0:
+                ff = subprocess.run(
+                    ["git", "branch", "-f", branch, base_ref],
+                    cwd=repo_root, capture_output=True, text=True,
+                )
+                if ff.returncode == 0:
+                    print(f"Fast-forwarded {branch} to {base_ref}.")
+                else:
+                    # Branch is likely checked out in another worktree.
+                    print(f"Warning: could not fast-forward {branch} to {base_ref}: "
+                          f"{ff.stderr.strip() or 'unknown error'}")
+            else:
+                print(f"Branch {branch} has commits not on {base_ref}; leaving as-is.")
+
+        # Create worktree
+        wt_base.mkdir(parents=True, exist_ok=True)
+        if wt_path.exists():
+            if is_valid_worktree(repo_root, wt_path):
+                print(f"Worktree at {wt_path} is valid. Reusing.")
+            else:
+                print(f"Warning: {wt_path} exists but is not a valid worktree. Removing and recreating...")
+                _rmtree_robust(wt_path)
+                subprocess.run(["git", "worktree", "prune"], cwd=repo_root)
+                subprocess.run(
+                    ["git", "worktree", "add", str(wt_path), branch],
+                    cwd=repo_root, check=True
+                )
         else:
-            print(f"Warning: {wt_path} exists but is not a valid worktree. Removing and recreating...")
-            _rmtree_robust(wt_path)
-            subprocess.run(["git", "worktree", "prune"], cwd=repo_root)
+            print(f"Creating worktree at {wt_path}...")
             subprocess.run(
                 ["git", "worktree", "add", str(wt_path), branch],
                 cwd=repo_root, check=True
             )
-    else:
-        print(f"Creating worktree at {wt_path}...")
-        subprocess.run(
-            ["git", "worktree", "add", str(wt_path), branch],
-            cwd=repo_root, check=True
-        )
 
     # Phase 1: Allocate ALL ports upfront (deterministic from project+session+server)
     proj = project_name(repo_root)
@@ -1379,7 +1383,9 @@ def cmd_kill(args):
     # Phase 3: Remove worktree, logs, and registry entry
     if args.remove:
         wt = Path(s["worktree"])
-        if wt.exists():
+        if is_repo_root_worktree(wt, repo_root):
+            print(f"'{name}' runs in place ({wt}); stopping servers, leaving the checkout.")
+        elif wt.exists():
             print(f"Removing worktree {wt}...")
             result = subprocess.run(
                 ["git", "worktree", "remove", str(wt), "--force"],
@@ -1390,7 +1396,7 @@ def cmd_kill(args):
                 _rmtree_robust(wt)
                 subprocess.run(["git", "worktree", "prune"], cwd=repo_root)
 
-        if wt.exists():
+        if wt.exists() and not is_repo_root_worktree(wt, repo_root):
             # Directory is still locked — don't remove from registry
             s["status"] = "stopped"
             save_sessions(repo_root, sessions)
