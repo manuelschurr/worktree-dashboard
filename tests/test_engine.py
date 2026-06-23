@@ -248,6 +248,24 @@ def test_grid_pane_command_is_root_safe():
     assert "claude" in cmd
     assert "dangerously-skip-permissions" not in cmd
 
+def test_host_for_main_collapses_to_apex():
+    assert orchestrator.host_for("main", "frontend", "demo", primary=True) == "demo.localhost"
+    assert orchestrator.host_for("main", "backend", "demo") == "demo-backend.localhost"
+
+def test_register_routes_main_uses_apex(tmp_path, monkeypatch):
+    monkeypatch.setattr(orchestrator, "PROXY_ROUTES_FILE", tmp_path / "routes.json")
+    monkeypatch.setattr(orchestrator, "PROXY_DIR", tmp_path)
+    orchestrator.register_proxy_routes("demo", "main", {"frontend": 10, "backend": 20},
+                                       primary_server="frontend")
+    r = orchestrator.load_proxy_routes()
+    assert r["demo.localhost"] == 10            # apex primary
+    assert r["demo-backend.localhost"] == 20    # apex non-primary
+    assert "main.demo.localhost" not in r       # no session label
+
+def test_is_repo_root_worktree():
+    assert orchestrator.is_repo_root_worktree("/root/code/demo", "/root/code/demo/") is True
+    assert orchestrator.is_repo_root_worktree("/root/code/worktrees/demo/1", "/root/code/demo") is False
+
 def test_reorder_swaps_sorts_into_order():
     cur = ["wt1", "wt2", "wt3", "wt5", "wt4"]   # #5 re-added before #4 -> out of order
     desired = ["wt1", "wt2", "wt3", "wt4", "wt5"]

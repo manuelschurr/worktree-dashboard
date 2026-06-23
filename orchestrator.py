@@ -129,6 +129,7 @@ PROXY_ROUTES_FILE = PROXY_DIR / "routes.json"
 ACCESS_FILE = PROXY_DIR / "access.json"
 DEFAULT_PROXY_PORT = 1337
 DEFAULT_TLD = "localhost"
+MAIN_SESSION = "main"  # reserved: served in-place at the apex host <project>.<tld>
 CLAUDE_CMD = "claude --dangerously-skip-permissions"
 
 def _tld():    return os.environ.get("ORCH_TLD", DEFAULT_TLD)
@@ -143,6 +144,8 @@ def _url_port_suffix():
 
 def host_for(session, server, project, *, primary=False):
     tld = _tld()
+    if session == MAIN_SESSION:
+        return f"{project}.{tld}" if primary else f"{project}-{server}.{tld}"
     return f"{session}.{project}.{tld}" if primary else f"{session}-{server}.{project}.{tld}"
 
 def proxy_url(session, server, project, *, primary=False):
@@ -603,6 +606,12 @@ def ensure_gitignore(repo_root: Path):
 
 def worktree_base_dir(repo_root: Path) -> Path:
     return (repo_root.parent / "worktrees" / project_name(repo_root)).resolve()
+
+
+def is_repo_root_worktree(worktree, repo_root):
+    """True if a session's worktree IS the repo root — the in-place `main` session,
+    whose 'worktree' must never be git-removed."""
+    return os.path.normpath(str(worktree)) == os.path.normpath(str(repo_root))
 
 
 def substitute_vars(text: str, port_map: dict, current_server: str = "",
