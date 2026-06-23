@@ -1405,7 +1405,8 @@ def cmd_kill(args):
             print(f"Close anything using that directory, then retry.", file=sys.stderr)
             sys.exit(1)
 
-        print("Worktree removed.")
+        if not is_repo_root_worktree(wt, repo_root):
+            print("Worktree removed.")
         log_dir = orch_dir(repo_root) / LOGS_DIR / name
         if log_dir.exists():
             _rmtree_robust(log_dir)
