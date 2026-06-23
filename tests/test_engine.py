@@ -247,3 +247,15 @@ def test_grid_pane_command_is_root_safe():
     cmd = orchestrator.grid_pane_command()
     assert "claude" in cmd
     assert "dangerously-skip-permissions" not in cmd
+
+def test_reorder_swaps_sorts_into_order():
+    cur = ["wt1", "wt2", "wt3", "wt5", "wt4"]   # #5 re-added before #4 -> out of order
+    desired = ["wt1", "wt2", "wt3", "wt4", "wt5"]
+    swaps = orchestrator.reorder_swaps(cur, desired)
+    assert swaps == [(3, 4)]
+    for i, j in swaps:        # applying them yields the desired order
+        cur[i], cur[j] = cur[j], cur[i]
+    assert cur == desired
+
+def test_reorder_swaps_already_ordered():
+    assert orchestrator.reorder_swaps(["a", "b", "c"], ["a", "b", "c"]) == []
