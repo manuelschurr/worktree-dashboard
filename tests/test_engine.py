@@ -239,3 +239,11 @@ def test_worktree_paths_under_filters_to_base():
 
 def test_worktree_paths_under_none_match():
     assert orchestrator.worktree_paths_under(GIT_WT, "/root/code/worktrees/other") == []
+
+def test_grid_pane_command_is_root_safe():
+    # Grid panes run as root on the VPS, where claude refuses
+    # --dangerously-skip-permissions. Plain `claude` works and honors the user's
+    # default permission mode.
+    cmd = orchestrator.grid_pane_command()
+    assert "claude" in cmd
+    assert "dangerously-skip-permissions" not in cmd
