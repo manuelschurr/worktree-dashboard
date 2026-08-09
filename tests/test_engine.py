@@ -289,3 +289,62 @@ def test_reorder_swaps_sorts_into_order():
 
 def test_reorder_swaps_already_ordered():
     assert orchestrator.reorder_swaps(["a", "b", "c"], ["a", "b", "c"]) == []
+
+# ─── reverse proxy: rewrite Host on EVERY pipelined request ────────────────
+# Caddy multiplexes many browser requests onto one keep-alive connection to the
+# loopback proxy. EVERY request — not just the first — must have its Host
+# rewritten to localhost:<port>, or a Host-validating dev server (Vite) 403s the
+# later ones ("Blocked request. This host is not allowed").
+
+def test_rewrite_pipelined_single_request():
+    req = b"GET /a HTTP/1.1\r\nHost: app.example.com\r\nAccept: */*\r\n\r\n"
+    out, leftover, raw = orchestrator.rewrite_pipelined_requests(req, 5000, "app.example.com")
+    assert leftover == b"" and raw is False
+    assert b"Host: localhost:5000\r\n" in out
+    assert b"X-Forwarded-Host: app.example.com\r\n" in out
+    assert b"\r\nHost: app.example.com" not in out    # original Host header replaced (not X-Forwarded-Host)
+
+def test_rewrite_pipelined_two_requests_both_rewritten():
+    req = (b"GET /a HTTP/1.1\r\nHost: app.example.com\r\n\r\n"
+           b"GET /b HTTP/1.1\r\nHost: app.example.com\r\n\r\n")
+    out, leftover, raw = orchestrator.rewrite_pipelined_requests(req, 5000, "app.example.com")
+    assert leftover == b"" and raw is False
+    assert out.count(b"Host: localhost:5000\r\n") == 2   # the bug: only the first was rewritten
+    assert b"\r\nHost: app.example.com" not in out
+    assert b"GET /a " in out and b"GET /b " in out
+
+def test_rewrite_pipelined_incomplete_headers_are_leftover():
+    req = b"GET /a HTTP/1.1\r\nHost: app.example.com\r\n"   # no blank line yet
+    out, leftover, raw = orchestrator.rewrite_pipelined_requests(req, 5000, "app.example.com")
+    assert out == b"" and raw is False
+    assert leftover == req                                # held until the rest arrives
+
+def test_rewrite_pipelined_body_by_content_length():
+    req = (b"POST /x HTTP/1.1\r\nHost: app.example.com\r\nContent-Length: 5\r\n\r\nhello"
+           b"GET /y HTTP/1.1\r\nHost: app.example.com\r\n\r\n")
+    out, leftover, raw = orchestrator.rewrite_pipelined_requests(req, 5000, "app.example.com")
+    assert leftover == b"" and raw is False
+    assert b"\r\n\r\nhello" in out                        # body preserved verbatim
+    assert out.count(b"Host: localhost:5000\r\n") == 2
+    assert b"GET /y " in out
+
+def test_rewrite_pipelined_incomplete_body_is_leftover():
+    req = b"POST /x HTTP/1.1\r\nHost: app.example.com\r\nContent-Length: 5\r\n\r\nhel"  # 3/5 body bytes
+    out, leftover, raw = orchestrator.rewrite_pipelined_requests(req, 5000, "app.example.com")
+    assert out == b"" and raw is False
+    assert leftover == req                                # whole request held until body completes
+
+def test_rewrite_pipelined_websocket_upgrade_switches_to_raw():
+    req = (b"GET /ws HTTP/1.1\r\nHost: app.example.com\r\nConnection: Upgrade\r\n"
+           b"Upgrade: websocket\r\n\r\n")
+    out, leftover, raw = orchestrator.rewrite_pipelined_requests(req, 5000, "app.example.com")
+    assert raw is True and leftover == b""
+    assert b"Host: localhost:5000\r\n" in out             # the upgrade request itself is still rewritten
+    assert b"Upgrade: websocket" in out
+
+def test_rewrite_pipelined_chunked_switches_to_raw():
+    req = (b"POST /x HTTP/1.1\r\nHost: app.example.com\r\nTransfer-Encoding: chunked\r\n\r\n"
+           b"5\r\nhello\r\n0\r\n\r\n")
+    out, leftover, raw = orchestrator.rewrite_pipelined_requests(req, 5000, "app.example.com")
+    assert raw is True and leftover == b""
+    assert b"Host: localhost:5000\r\n" in out

@@ -1620,6 +1620,76 @@ def cmd_cleanup(args):
 # Reverse proxy
 # ---------------------------------------------------------------------------
 
+def _rewrite_host_in_headers(header_block, target_port, forwarded_host):
+    """Rewrite the Host header in a single request header block (request-line +
+    headers, no trailing CRLFCRLF) to localhost:<target_port>, keeping the
+    original as X-Forwarded-Host. Returns the rewritten header block."""
+    out = []
+    for line in header_block.split(b"\r\n"):
+        if line.lower().startswith(b"host:"):
+            out.append(f"Host: localhost:{target_port}".encode("latin-1"))
+            out.append(f"X-Forwarded-Host: {forwarded_host}".encode("latin-1"))
+        else:
+            out.append(line)
+    return b"\r\n".join(out)
+
+
+def _first_header_value(lower_header_block, name):
+    """First value of header `name` (bytes, lowercase) in a lowercased block."""
+    prefix = name + b":"
+    for line in lower_header_block.split(b"\r\n"):
+        if line.startswith(prefix):
+            return line.split(b":", 1)[1].strip()
+    return None
+
+
+def rewrite_pipelined_requests(buf, target_port, forwarded_host):
+    """Rewrite the Host header of every complete HTTP/1.1 request in ``buf`` to
+    localhost:<target_port> (adding X-Forwarded-Host), for forwarding upstream.
+
+    Caddy pools many browser requests onto one keep-alive connection, so the
+    proxy must rewrite Host on EVERY request — not just the first — or a
+    Host-validating dev server (Vite) 403s the later ones.
+
+    Returns (out, leftover, raw):
+      out      - complete requests found in ``buf``, each with Host rewritten.
+      leftover - trailing bytes of an incomplete request (headers or a
+                 Content-Length body not fully present); prepend to the next read.
+      raw      - True once a request is a WebSocket upgrade or uses chunked
+                 transfer-encoding (which this framer doesn't parse): that
+                 request's headers are rewritten and everything after it in
+                 ``buf`` is emitted verbatim into ``out``; the caller must then
+                 pipe the rest of the connection raw. leftover is b"".
+    """
+    out = b""
+    i = 0
+    n = len(buf)
+    while i < n:
+        end = buf.find(b"\r\n\r\n", i)
+        if end == -1:
+            return out, buf[i:], False           # headers not complete yet
+        header_block = buf[i:end]
+        body_start = end + 4
+        lower = header_block.lower()
+        new_header = _rewrite_host_in_headers(header_block, target_port, forwarded_host)
+
+        te = _first_header_value(lower, b"transfer-encoding")
+        upgrade = _first_header_value(lower, b"upgrade") is not None
+        if upgrade or (te is not None and b"chunked" in te):
+            # Bodies we don't frame (chunked) or a protocol switch (WebSocket):
+            # rewrite this request's headers, then hand the rest off to a raw pipe.
+            return out + new_header + b"\r\n\r\n" + buf[body_start:], b"", True
+
+        clen_val = _first_header_value(lower, b"content-length")
+        clen = int(clen_val) if (clen_val is not None and clen_val.isdigit()) else 0
+        body_end = body_start + clen
+        if body_end > n:
+            return out, buf[i:], False           # body not fully arrived yet
+        out += new_header + b"\r\n\r\n" + buf[body_start:body_end]
+        i = body_end
+    return out, b"", False
+
+
 async def _proxy_connection(reader, writer, routes):
     """Handle one proxied connection: read headers, route by Host, pipe."""
     try:
@@ -1634,7 +1704,6 @@ async def _proxy_connection(reader, writer, routes):
 
         header_end = buf.index(b"\r\n\r\n")
         header_bytes = buf[:header_end]
-        rest = buf[header_end:]  # \r\n\r\n + any body bytes
 
         # Extract Host header
         host = None
@@ -1672,39 +1741,63 @@ async def _proxy_connection(reader, writer, routes):
             writer.close()
             return
 
-        # Rewrite Host header so backends accept the request, keep original
-        # as X-Forwarded-Host.
-        lines = header_bytes.split(b"\r\n")
-        new_lines = []
-        forwarded_added = False
-        for line in lines:
-            if line.lower().startswith(b"host:"):
-                new_lines.append(f"Host: localhost:{target_port}".encode("latin-1"))
-                new_lines.append(f"X-Forwarded-Host: {host}".encode("latin-1"))
-                forwarded_added = True
-            else:
-                new_lines.append(line)
-        be_writer.write(b"\r\n".join(new_lines) + rest)
-        await be_writer.drain()
-
-        # Bidirectional pipe (handles WebSocket, SSE, chunked, etc.)
-        async def pipe(src, dst):
+        # Forward client→upstream, rewriting the Host header on EVERY request —
+        # not just the first. Caddy pools many browser requests onto one
+        # keep-alive connection, so a Host-validating dev server (Vite) 403s any
+        # later request still carrying the public Host. `buf` already holds the
+        # first request's headers (+ maybe more); rewrite_pipelined_requests
+        # frames the rest and signals a raw fallback on WebSocket upgrade /
+        # chunked bodies.
+        async def rewrite_client_to_upstream():
+            pending = buf
             try:
                 while True:
-                    data = await src.read(65536)
-                    if not data:
+                    fwd, pending, raw = rewrite_pipelined_requests(
+                        pending, target_port, host)
+                    if fwd:
+                        be_writer.write(fwd)
+                        await be_writer.drain()
+                    if raw:  # upgrade / chunked → pipe the rest of the stream verbatim
+                        while True:
+                            data = await reader.read(65536)
+                            if not data:
+                                break
+                            be_writer.write(data)
+                            await be_writer.drain()
                         break
-                    dst.write(data)
-                    await dst.drain()
+                    data = await reader.read(65536)
+                    if not data:  # client closed; flush any held partial bytes as-is
+                        if pending:
+                            be_writer.write(pending)
+                            await be_writer.drain()
+                        break
+                    pending += data
             except (ConnectionError, asyncio.CancelledError, OSError):
                 pass
             finally:
                 try:
-                    dst.close()
+                    be_writer.close()
                 except Exception:
                     pass
 
-        await asyncio.gather(pipe(reader, be_writer), pipe(be_reader, writer))
+        # Upstream→client is response data (bodies, WebSocket frames, SSE) — raw.
+        async def upstream_to_client():
+            try:
+                while True:
+                    data = await be_reader.read(65536)
+                    if not data:
+                        break
+                    writer.write(data)
+                    await writer.drain()
+            except (ConnectionError, asyncio.CancelledError, OSError):
+                pass
+            finally:
+                try:
+                    writer.close()
+                except Exception:
+                    pass
+
+        await asyncio.gather(rewrite_client_to_upstream(), upstream_to_client())
     except (asyncio.TimeoutError, ConnectionError, OSError):
         pass
     finally:
