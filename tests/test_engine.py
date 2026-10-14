@@ -290,61 +290,152 @@ def test_reorder_swaps_sorts_into_order():
 def test_reorder_swaps_already_ordered():
     assert orchestrator.reorder_swaps(["a", "b", "c"], ["a", "b", "c"]) == []
 
-# ─── reverse proxy: rewrite Host on EVERY pipelined request ────────────────
+# ─── reverse proxy: frame each request, rewrite Host on EVERY one ──────────
 # Caddy multiplexes many browser requests onto one keep-alive connection to the
 # loopback proxy. EVERY request — not just the first — must have its Host
 # rewritten to localhost:<port>, or a Host-validating dev server (Vite) 403s the
 # later ones ("Blocked request. This host is not allowed").
 
-def test_rewrite_pipelined_single_request():
+def test_rewrite_request_replaces_host_and_keeps_it_as_forwarded():
     req = b"GET /a HTTP/1.1\r\nHost: app.example.com\r\nAccept: */*\r\n\r\n"
-    out, leftover, raw = orchestrator.rewrite_pipelined_requests(req, 5000, "app.example.com")
-    assert leftover == b"" and raw is False
+    request, rest, raw = orchestrator.take_request(req)
+    assert (request, rest, raw) == (req, b"", False)
+    assert orchestrator.request_host(request) == "app.example.com"
+    out = orchestrator.rewrite_request(request, 5000, "app.example.com")
     assert b"Host: localhost:5000\r\n" in out
     assert b"X-Forwarded-Host: app.example.com\r\n" in out
     assert b"\r\nHost: app.example.com" not in out    # original Host header replaced (not X-Forwarded-Host)
 
-def test_rewrite_pipelined_two_requests_both_rewritten():
+def test_take_request_splits_two_requests():
     req = (b"GET /a HTTP/1.1\r\nHost: app.example.com\r\n\r\n"
-           b"GET /b HTTP/1.1\r\nHost: app.example.com\r\n\r\n")
-    out, leftover, raw = orchestrator.rewrite_pipelined_requests(req, 5000, "app.example.com")
-    assert leftover == b"" and raw is False
-    assert out.count(b"Host: localhost:5000\r\n") == 2   # the bug: only the first was rewritten
-    assert b"\r\nHost: app.example.com" not in out
-    assert b"GET /a " in out and b"GET /b " in out
+           b"GET /b HTTP/1.1\r\nHost: other.example.com:443\r\n\r\n")
+    first, rest, raw = orchestrator.take_request(req)
+    assert first.startswith(b"GET /a ") and raw is False
+    second, rest, raw = orchestrator.take_request(rest)
+    assert second.startswith(b"GET /b ") and rest == b"" and raw is False
+    assert orchestrator.request_host(second) == "other.example.com"   # port dropped
 
-def test_rewrite_pipelined_incomplete_headers_are_leftover():
+def test_take_request_incomplete_headers_wait():
     req = b"GET /a HTTP/1.1\r\nHost: app.example.com\r\n"   # no blank line yet
-    out, leftover, raw = orchestrator.rewrite_pipelined_requests(req, 5000, "app.example.com")
-    assert out == b"" and raw is False
-    assert leftover == req                                # held until the rest arrives
+    assert orchestrator.take_request(req) == (None, req, False)   # held until the rest arrives
 
-def test_rewrite_pipelined_body_by_content_length():
+def test_take_request_body_by_content_length():
     req = (b"POST /x HTTP/1.1\r\nHost: app.example.com\r\nContent-Length: 5\r\n\r\nhello"
            b"GET /y HTTP/1.1\r\nHost: app.example.com\r\n\r\n")
-    out, leftover, raw = orchestrator.rewrite_pipelined_requests(req, 5000, "app.example.com")
-    assert leftover == b"" and raw is False
-    assert b"\r\n\r\nhello" in out                        # body preserved verbatim
-    assert out.count(b"Host: localhost:5000\r\n") == 2
-    assert b"GET /y " in out
+    request, rest, raw = orchestrator.take_request(req)
+    assert request.endswith(b"\r\n\r\nhello") and raw is False
+    assert orchestrator.rewrite_request(request, 5000, "app.example.com").endswith(b"\r\n\r\nhello")   # body preserved verbatim
+    assert rest.startswith(b"GET /y ")
 
-def test_rewrite_pipelined_incomplete_body_is_leftover():
+def test_take_request_incomplete_body_waits():
     req = b"POST /x HTTP/1.1\r\nHost: app.example.com\r\nContent-Length: 5\r\n\r\nhel"  # 3/5 body bytes
-    out, leftover, raw = orchestrator.rewrite_pipelined_requests(req, 5000, "app.example.com")
-    assert out == b"" and raw is False
-    assert leftover == req                                # whole request held until body completes
+    assert orchestrator.take_request(req) == (None, req, False)   # whole request held until body completes
 
-def test_rewrite_pipelined_websocket_upgrade_switches_to_raw():
+def test_take_request_websocket_upgrade_switches_to_raw():
     req = (b"GET /ws HTTP/1.1\r\nHost: app.example.com\r\nConnection: Upgrade\r\n"
            b"Upgrade: websocket\r\n\r\n")
-    out, leftover, raw = orchestrator.rewrite_pipelined_requests(req, 5000, "app.example.com")
-    assert raw is True and leftover == b""
+    request, rest, raw = orchestrator.take_request(req)
+    assert raw is True and rest == b"" and request == req
+    out = orchestrator.rewrite_request(request, 5000, "app.example.com")
     assert b"Host: localhost:5000\r\n" in out             # the upgrade request itself is still rewritten
     assert b"Upgrade: websocket" in out
 
-def test_rewrite_pipelined_chunked_switches_to_raw():
+def test_take_request_chunked_switches_to_raw():
     req = (b"POST /x HTTP/1.1\r\nHost: app.example.com\r\nTransfer-Encoding: chunked\r\n\r\n"
            b"5\r\nhello\r\n0\r\n\r\n")
-    out, leftover, raw = orchestrator.rewrite_pipelined_requests(req, 5000, "app.example.com")
-    assert raw is True and leftover == b""
-    assert b"Host: localhost:5000\r\n" in out
+    request, rest, raw = orchestrator.take_request(req)
+    assert raw is True and rest == b"" and request == req
+    assert b"Host: localhost:5000\r\n" in orchestrator.rewrite_request(request, 5000, "app.example.com")
+
+# Every public site reaches the proxy on one address (Caddy's reverse_proxy to
+# 127.0.0.1:1337), and Caddy pools its upstream connections per address, not per
+# site: one keep-alive connection carries requests for different hosts one after
+# another. Each must reach its own host's server. Routed once per connection, a
+# link from swarm.rookpine.com to swarm-gcs.rookpine.com was answered by the
+# first site's server.
+
+import asyncio
+
+async def _named_upstream(name):
+    """A keep-alive HTTP/1.1 server that answers every request with its own name
+    and the request's path and body."""
+    async def handle(reader, writer):
+        buf = b""
+        try:
+            while True:
+                while b"\r\n\r\n" not in buf:
+                    chunk = await reader.read(65536)
+                    if not chunk:
+                        return
+                    buf += chunk
+                end = buf.index(b"\r\n\r\n")
+                head, buf = buf[:end], buf[end + 4:]
+                clen = 0
+                for line in head.split(b"\r\n")[1:]:
+                    k, _, v = line.partition(b":")
+                    if k.strip().lower() == b"content-length":
+                        clen = int(v)
+                while len(buf) < clen:
+                    buf += await reader.read(65536)
+                body, buf = buf[:clen], buf[clen:]
+                path = head.split(b" ")[1]
+                reply = name.encode() + b" " + path + b" " + body
+                writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n%s" % (len(reply), reply))
+                await writer.drain()
+        finally:
+            writer.close()
+    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    return server, server.sockets[0].getsockname()[1]
+
+async def _read_response(reader):
+    head = await reader.readuntil(b"\r\n\r\n")
+    status = int(head.split(b" ")[1])
+    clen = next(int(l.split(b":")[1]) for l in head.split(b"\r\n") if l.lower().startswith(b"content-length:"))
+    return status, await reader.readexactly(clen)
+
+def _through_proxy(requests, routes_for):
+    """Send each request on ONE connection to the proxy, reading each response
+    before the next request, the way Caddy uses a pooled connection."""
+    async def run():
+        a, port_a = await _named_upstream("site-a")
+        b, port_b = await _named_upstream("site-b")
+        routes = routes_for(port_a, port_b)
+        proxy = await asyncio.start_server(lambda r, w: orchestrator._proxy_connection(r, w, routes), "127.0.0.1", 0)
+        reader, writer = await asyncio.open_connection("127.0.0.1", proxy.sockets[0].getsockname()[1])
+        answers = []
+        for req in requests:
+            writer.write(req)
+            await writer.drain()
+            answers.append(await asyncio.wait_for(_read_response(reader), 5))
+        writer.close()
+        for s in (proxy, a, b):
+            s.close()
+        return answers
+    return asyncio.run(run())
+
+@pytest.fixture
+def no_access_log(monkeypatch):
+    monkeypatch.setattr(orchestrator, "record_access", lambda host, now: None)
+
+def test_proxy_routes_each_request_on_a_pooled_connection_by_its_own_host(no_access_log):
+    answers = _through_proxy([
+        b"GET /index HTTP/1.1\r\nHost: a.example.com\r\n\r\n",
+        b"GET /?s=escort HTTP/1.1\r\nHost: b.example.com\r\n\r\n",
+        b"POST /form HTTP/1.1\r\nHost: b.example.com\r\nContent-Length: 5\r\n\r\nhello",
+        b"GET /back HTTP/1.1\r\nHost: a.example.com:443\r\n\r\n",
+    ], lambda pa, pb: {"a.example.com": pa, "b.example.com": pb})
+    assert answers == [
+        (200, b"site-a /index "),
+        (200, b"site-b /?s=escort "),
+        (200, b"site-b /form hello"),
+        (200, b"site-a /back "),
+    ]
+
+def test_proxy_answers_an_unrouted_host_and_keeps_the_connection(no_access_log):
+    answers = _through_proxy([
+        b"GET /x HTTP/1.1\r\nHost: a.example.com\r\n\r\n",
+        b"GET /y HTTP/1.1\r\nHost: nowhere.example.com\r\n\r\n",
+        b"GET /z HTTP/1.1\r\nHost: a.example.com\r\n\r\n",
+    ], lambda pa, pb: {"a.example.com": pa})
+    assert [status for status, _ in answers] == [200, 404, 200]
+    assert answers[2] == (200, b"site-a /z ")
