@@ -278,6 +278,26 @@ def test_is_repo_root_worktree():
     assert orchestrator.is_repo_root_worktree("/root/code/demo", "/root/code/demo/") is True
     assert orchestrator.is_repo_root_worktree("/root/code/worktrees/demo/1", "/root/code/demo") is False
 
+def test_cleanup_leaves_in_place_main(tmp_path, monkeypatch):
+    # A stopped `main` runs in the repo root: cleanup must not delete the checkout.
+    import argparse
+    monkeypatch.setattr(orchestrator, "PROXY_ROUTES_FILE", tmp_path / "routes.json")
+    monkeypatch.setattr(orchestrator, "PROXY_DIR", tmp_path)
+    repo = tmp_path / "demo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    other = tmp_path / "worktrees" / "demo" / "1"
+    other.mkdir(parents=True)
+    monkeypatch.setattr(orchestrator, "find_repo_root", lambda: repo)
+    orchestrator.save_sessions(repo, {
+        "main": {"worktree": str(repo), "status": "stopped", "servers": []},
+        "1": {"worktree": str(other), "status": "stopped", "servers": []},
+    })
+    orchestrator.cmd_cleanup(argparse.Namespace(force=True))
+    assert (repo / ".git").is_dir()
+    assert not other.exists()
+    assert set(orchestrator.load_sessions(repo)) == {"main"}
+
 def test_reorder_swaps_sorts_into_order():
     cur = ["wt1", "wt2", "wt3", "wt5", "wt4"]   # #5 re-added before #4 -> out of order
     desired = ["wt1", "wt2", "wt3", "wt4", "wt5"]

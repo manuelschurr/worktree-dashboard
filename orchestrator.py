@@ -1561,7 +1561,17 @@ def cmd_cleanup(args):
     repo_root = find_repo_root()
     sessions = load_sessions(repo_root)
 
-    stopped = {n: s for n, s in sessions.items() if s.get("status") in ("stopped", "dead")}
+    # The in-place `main` session's worktree IS the repo root: removing it would
+    # delete the checkout. Cleanup leaves it alone; `kill main --remove` drops it
+    # from the registry and keeps the checkout.
+    in_place = {n for n, s in sessions.items()
+                if n == MAIN_SESSION or is_repo_root_worktree(s["worktree"], repo_root)}
+    for name in sorted(in_place):
+        if sessions[name].get("status") in ("stopped", "dead"):
+            print(f"Leaving '{name}' alone: it runs in place in {repo_root}.")
+
+    stopped = {n: s for n, s in sessions.items()
+               if s.get("status") in ("stopped", "dead") and n not in in_place}
 
     if not stopped:
         print("Nothing to clean up.")
